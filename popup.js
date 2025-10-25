@@ -30,6 +30,24 @@ function renderStatus(s) {
   `;
 }
 
-chrome.runtime.sendMessage({ type: "GET_STATUS" }, ({ status }) => {
-  renderStatus(status);
+function loading(msg = "Classifying…") {
+  statusEl.textContent = msg;
+}
+
+// Immediately classify the active tab on popup open
+document.addEventListener("DOMContentLoaded", () => {
+  loading();
+  chrome.runtime.sendMessage({ type: "CLASSIFY_ACTIVE" }, (resp) => {
+    if (!resp || resp.ok === false) {
+      // Try to at least show the last-known status if present
+      chrome.runtime.sendMessage({ type: "GET_STATUS" }, ({ status }) => {
+        if (!resp || resp.error) {
+          statusEl.textContent = resp?.error || "Classification failed.";
+        }
+        if (status) renderStatus(status);
+      });
+      return;
+    }
+    renderStatus(resp.status || null);
+  });
 });

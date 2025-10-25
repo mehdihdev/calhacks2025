@@ -3,7 +3,7 @@ import express from "express";
 import morgan from "morgan";
 import cors from "cors";
 import Anthropic from "@anthropic-ai/sdk";
-import LRU from "lru-cache";
+import { LRUCache } from "lru-cache";
 import { z } from "zod";
 
 const app = express();
@@ -11,24 +11,33 @@ app.use(cors());
 app.use(express.json({ limit: "256kb" }));
 app.use(morgan("tiny"));
 
+if (!process.env.ANTHROPIC_API_KEY) {
+  console.error("Missing ANTHROPIC_API_KEY in environment.");
+  process.exit(1);
+}
+const MODEL = process.env.CLAUDE_MODEL; // e.g., claude-3-7-sonnet-20250219
+if (!MODEL) {
+  console.error("Missing CLAUDE_MODEL in environment. Set a concrete model id returned by /v1/models.");
+  process.exit(1);
+}
+
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const PORT = process.env.PORT || 4000;
 
 const classifyInput = z.object({
-  url: z.string().url().optional().default(""),
+  url: z.string().url().or(z.literal("")).optional().default(""),
   title: z.string().optional().default("")
 });
 
-// Cache by domain + simplified title
-const cache = new LRU({ max: 2000, ttl: 1000 * 60 * 60 * 24 }); // 24h
+const cache = new LRUCache({ max: 2000, ttl: 1000 * 60 * 60 * 24 }); // 24h
 
 const PRODUCTIVITY_POLICY = `
 You are a strict productivity classifier for browsing activity.
 
 Return ONLY valid JSON with keys:
-- productive: boolean                // true if content likely supports focused work/study
-- reason: string                     // short justification
-- category: string                   // one of: "work", "learning", "utilities", "communication", "news", "social", "entertainment", "shopping", "adult", "unknown"
+- productive: boolean
+- reason: string
+- category: string  // one of: "work", "learning", "utilities", "communication", "news", "social", "entertainment", "shopping", "adult", "unknown"
 
 Heuristics (favor precision; false positives are costly):
 - Productive: docs, IDEs, coding Q&A, academic papers, LMS, email (work), calendar, dashboards, notes, task tools, StackOverflow, GitHub, Jupyter, LeetCode (practice).
@@ -37,6 +46,7 @@ Heuristics (favor precision; false positives are costly):
 - Utilities (search engine home, blank new tab) = unknown (non-productive by default).
 
 If unsure, set productive=false.
+Strictly output only JSON, with no extra text before or after.
 `;
 
 // Minimal normalizer
@@ -71,25 +81,34 @@ Domain: ${domain}
 Page Title: ${title}
 
 Classify this visit. Return JSON only.
-`;
+`.trim();
 
   try {
     const msg = await anthropic.messages.create({
-      model: "claude-3-5-sonnet-latest",
+      model: MODEL,
       max_tokens: 200,
       temperature: 0,
       system: PRODUCTIVITY_POLICY,
       messages: [{ role: "user", content: prompt }]
     });
 
-    // Extract the JSON block robustly
-    const text = msg.content?.[0]?.text || "";
+    const block = msg.content?.[0];
+    const text = block && block.type === "text" ? block.text : "";
+    if (!text || !text.trim()) {
+      console.error("Empty/invalid Claude response:", JSON.stringify(msg, null, 2));
+      return res.status(502).json({ error: "Empty Claude response" });
+    }
+
+    // Try strict parse; fall back to first {...}
     let parsedJson;
-    try { parsedJson = JSON.parse(text); }
-    catch {
-      // Fallback: pull first {...} block
+    try {
+      parsedJson = JSON.parse(text);
+    } catch {
       const match = text.match(/\{[\s\S]*\}/);
-      if (!match) throw new Error("No JSON in Claude response");
+      if (!match) {
+        console.error("No JSON found in response text:", text);
+        return res.status(502).json({ error: "Claude did not return JSON" });
+      }
       parsedJson = JSON.parse(match[0]);
     }
 
@@ -98,19 +117,23 @@ Classify this visit. Return JSON only.
       reason: z.string(),
       category: z.string()
     });
-
     const result = shape.parse(parsedJson);
+
     cache.set(cacheKey, result);
     return res.json(result);
   } catch (e) {
-    console.error(e);
-    return res.status(500).json({ error: "Classification failed" });
+    const status = e.status ?? e.statusCode ?? 500;
+    const detail = e.error ?? e.message ?? String(e);
+    console.error("Anthropic error:", {
+      status,
+      detail,
+      data: e?.response?.data || e?.body || null,
+    });
+    return res.status(500).json({ error: "Classification failed", detail });
   }
 });
 
-// Optional: event logging endpoint (no DB; swap with your store later)
-app.post("/event", (req, res) => {
-  // You could write to a file or DB here. For scaffold, just 200 OK.
+app.post("/event", (_req, res) => {
   res.json({ ok: true });
 });
 
