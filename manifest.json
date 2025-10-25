@@ -1,10 +1,25 @@
 {
-  "name": "testsfsadfasfd",
-  "description": "testseetsts",
-  "version": "1.0",
   "manifest_version": 3,
+  "name": "Productivity Tracker",
+  "version": "0.1.0",
+  "description": "Checks your current tab with Claude to decide if it's productive.",
+  "permissions": ["tabs", "storage", "activeTab"],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "service-worker.js"
+  },
   "action": {
-    "default_popup": "main.html",
-    "default_icon": "icon.png"
+    "default_title": "Productivity",
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "icons": {
+    "16": "icon.png"
   }
 }
