@@ -3,7 +3,7 @@
   "name": "Productivity Tracker",
   "version": "0.1.0",
   "description": "Checks your current tab with Claude to decide if it's productive.",
-  "permissions": ["tabs", "storage", "activeTab"],
+  "permissions": ["tabs", "storage", "activeTab", "scripting", "notifications"],
   "host_permissions": ["<all_urls>"],
   "background": {
     "service_worker": "service-worker.js"

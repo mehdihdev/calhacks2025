@@ -1,0 +1,18 @@
+{
+  "name": "productivity-backend",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.67.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.6.1",
+    "express": "^4.21.2",
+    "lru-cache": "^10.4.3",
+    "morgan": "^1.10.1",
+    "zod": "^3.25.76"
+  }
+}
