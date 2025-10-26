@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "Productivity Tracker",
+  "name": "Pomibear - Your Productivity Tracker",
   "version": "0.1.0",
   "description": "Checks your current tab with Claude to decide if it's productive.",
   "permissions": ["tabs", "storage", "activeTab", "scripting", "notifications"],
@@ -20,6 +20,6 @@
     }
   ],
   "icons": {
-    "48": "calhacksicon.png"
+    "48": "Pomibear.png"
   }
 }
