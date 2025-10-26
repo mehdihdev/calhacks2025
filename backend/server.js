@@ -166,61 +166,124 @@ app.post("/event", (_req, res) => res.json({ ok: true }));
 // Fish Audio TTS endpoint for berating messages
 app.post("/berate", async (req, res) => {
   const { message, category } = req.body;
-  
+
   if (!message) {
     return res.status(400).json({ error: "Message is required" });
   }
 
-  // Generate berating messages based on category
-  const beratingMessages = {
-    social: [
-      "Stop wasting time on social media! Get back to work!",
-      "You're supposed to be productive, not scrolling through feeds!",
-      "Social media can wait! Focus on your goals!",
-      "Put down the phone and pick up your work!"
-    ],
-    entertainment: [
-      "This isn't helping you achieve your goals!",
-      "Entertainment can wait until you're done with work!",
-      "You're procrastinating! Get back to productive tasks!",
-      "Focus! This video isn't going anywhere!"
-    ],
-    shopping: [
-      "Stop shopping and start working!",
-      "Your wallet and productivity will thank you later!",
-      "Shopping can wait! Focus on earning first!",
-      "Put the cart down and pick up your tasks!"
-    ],
-    news: [
-      "News can wait! Your work can't!",
-      "Stop doomscrolling and start working!",
-      "The news will still be there when you're done!",
-      "Focus on what you can control - your work!"
-    ]
-  };
-
-  const messages = beratingMessages[category] || beratingMessages.entertainment;
-  const randomMessage = messages[Math.floor(Math.random() * messages.length)];
-  
   try {
-    // For now, let's use a simple text-to-speech approach
-    // You can replace this with actual Fish Audio API when you have the correct endpoint
-    console.log(`Berating message: ${randomMessage}`);
+    // Generate short, punchy insults using Claude AI
+    const prompt = `You are Fish, a menacing productivity enforcer. Generate a SHORT, punchy, memorable insult for someone wasting time on ${category || 'entertainment'}.
+
+Requirements:
+- MAXIMUM 8-10 words
+- Short and punchy
+- Memorable and repeatable
+- Funny but menacing
+- NO asterisks or stage directions
+- NO voice descriptions
+- Just the insult itself
+
+Examples:
+- "Your productivity is dryer than a desert!"
+- "Sloths work harder than you!"
+- "Your goals are crying!"
+- "Get back to work, slacker!"
+
+Generate ONE short insult now:`;
+
+    const msg = await anthropic.messages.create({
+      model: CLAUDE_MODEL,
+      max_tokens: 100,
+      temperature: 0.9, // High creativity
+      messages: [{ role: "user", content: prompt }],
+    });
+
+    const aiMessage = msg?.content?.[0]?.text || "You're procrastinating! Get back to productive tasks!";
+    console.log(`AI-generated berating message: ${aiMessage}`);
+
+    // Return the AI-generated message
+    res.json({
+      message: aiMessage.trim(),
+      category: category,
+      ai_generated: true
+    });
+
+  } catch (error) {
+    console.error('AI berating message generation error:', error);
     
-    // Return the message as text for now - the extension can use Web Speech API
-    res.json({ 
+    // Fallback to static messages if AI fails
+    const fallbackMessages = {
+      social: [
+        "Your goals are crying!",
+        "Sloths work harder than you!",
+        "Get back to work, slacker!"
+      ],
+      entertainment: [
+        "Your productivity is dryer than a desert!",
+        "This video won't make you rich!",
+        "Stop wasting time!"
+      ],
+      shopping: [
+        "Your wallet is crying!",
+        "Stop spending, start earning!",
+        "Shopping won't pay bills!"
+      ],
+      news: [
+        "News can wait!",
+        "Stop doomscrolling!",
+        "Focus on your work!"
+      ]
+    };
+
+    const messages = fallbackMessages[category] || fallbackMessages.entertainment;
+    const randomMessage = messages[Math.floor(Math.random() * messages.length)];
+
+    res.json({
       message: randomMessage,
       category: category,
-      fallback: true 
+      fallback: true
     });
-    
+  }
+});
+
+// AI-Generated hateful memes endpoint
+app.post("/generate-meme", async (req, res) => {
+  const { category } = req.body;
+
+  try {
+    const prompt = `Generate a hateful, sarcastic meme about productivity and staying focused. Make it brutally honest and funny. The user is currently distracted by ${category || 'entertainment'}. 
+
+Return ONLY the meme text, no explanations. Make it sound like a viral meme format.`;
+
+    const msg = await anthropic.messages.create({
+      model: CLAUDE_MODEL,
+      max_tokens: 150,
+      temperature: 0.8,
+      messages: [{ role: "user", content: prompt }],
+    });
+
+    const memeText = msg?.content?.[0]?.text || "WHEN YOU'RE SUPPOSED TO BE WORKING BUT YOU'RE ON YOUTUBE AGAIN";
+
+    res.json({
+      meme: memeText.trim(),
+      category: category || 'entertainment'
+    });
+
   } catch (error) {
-    console.error('Audio generation error:', error);
-    // Fallback: return a simple text response
-    res.json({ 
-      error: "Audio generation failed", 
-      message: randomMessage,
-      fallback: true 
+    console.error('Meme generation error:', error);
+    // Fallback memes
+    const fallbackMemes = [
+      "WHEN YOU'RE SUPPOSED TO BE WORKING BUT YOU'RE ON YOUTUBE AGAIN",
+      "ME: I'll just watch one video\nALSO ME: *watches 47 videos*",
+      "PRODUCTIVITY LEVEL: 📉📉📉📉📉",
+      "YOUR BRAIN: Let's be productive!\nYOUR HANDS: *opens YouTube*"
+    ];
+    
+    res.json({
+      meme: fallbackMemes[Math.floor(Math.random() * fallbackMemes.length)],
+      category: category || 'entertainment',
+      fallback: true
     });
   }
 });
