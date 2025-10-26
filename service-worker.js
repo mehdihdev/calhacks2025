@@ -72,6 +72,271 @@ const BEAR_OUTFITS = {
 const bearClosets = new Map(); // tabId -> { unlockedOutfits: Set, currentOutfit: string }
 const bearNames = new Map(); // tabId -> bearName
 
+// Walking Bear System
+const walkingBears = new Map(); // tabId -> { bearId, isActive, currentOutfit, position, direction }
+const BEAR_WALK_SPEED = 2; // pixels per frame
+const BEAR_CURSOR_FOLLOW_DISTANCE = 100; // pixels
+const BEAR_IDLE_TIMEOUT = 5000; // 5 seconds
+
+function startWalkingBear(tabId) {
+  console.log('🚶 Starting walking bear for tab:', tabId);
+  
+  const closet = bearClosets.get(tabId);
+  const currentOutfit = closet ? closet.currentOutfit : 'default';
+  
+  // Stop any existing walking bear
+  stopWalkingBear(tabId);
+  
+  chrome.scripting.executeScript({
+    target: { tabId: tabId },
+    func: (outfit) => {
+      // Remove any existing walking bear
+      const existingBear = document.getElementById('walking-bear');
+      if (existingBear) {
+        existingBear.remove();
+      }
+      
+      // Create walking bear
+      const bear = document.createElement('div');
+      bear.id = 'walking-bear';
+      bear.style.cssText = `
+        position: fixed;
+        width: 60px;
+        height: 60px;
+        z-index: 20000;
+        pointer-events: none;
+        transition: none;
+        font-size: 50px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        user-select: none;
+      `;
+      
+      // Set initial position (random on screen)
+      const initialX = Math.random() * (window.innerWidth - 60);
+      const initialY = Math.random() * (window.innerHeight - 60);
+      bear.style.left = initialX + 'px';
+      bear.style.top = initialY + 'px';
+      
+      // Set bear emoji based on outfit
+      const bearEmoji = getBearEmoji(outfit);
+      bear.textContent = bearEmoji;
+      
+      // Add walking animation
+      bear.style.animation = 'bearWalk 0.8s steps(4) infinite';
+      
+      // Add walking animations
+      if (!document.getElementById('walking-bear-animations')) {
+        const style = document.createElement('style');
+        style.id = 'walking-bear-animations';
+        style.textContent = `
+          @keyframes bearWalk {
+            0% { transform: translateY(0px) scaleX(1); }
+            25% { transform: translateY(-5px) scaleX(1); }
+            50% { transform: translateY(0px) scaleX(1); }
+            75% { transform: translateY(-3px) scaleX(1); }
+            100% { transform: translateY(0px) scaleX(1); }
+          }
+          
+          @keyframes bearIdle {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+          }
+          
+          @keyframes bearSleep {
+            0%, 100% { transform: rotate(0deg) scale(1); }
+            25% { transform: rotate(-5deg) scale(0.95); }
+            75% { transform: rotate(5deg) scale(0.95); }
+          }
+        `;
+        document.head.appendChild(style);
+      }
+      
+      document.body.appendChild(bear);
+      
+      // Bear movement and behavior system
+      let bearPosition = { x: initialX, y: initialY };
+      let bearDirection = { x: 1, y: 1 };
+      let bearState = 'walking'; // walking, idle, sleeping
+      let lastCursorPosition = { x: window.innerWidth / 2, y: window.innerHeight / 2 };
+      let idleTimer = null;
+      let sleepTimer = null;
+      
+      // Get bear emoji based on outfit
+      function getBearEmoji(outfit) {
+        const outfitEmojis = {
+          default: '🧸',
+          hat: '🧸🎩',
+          glasses: '🧸🕶️',
+          bowtie: '🧸🎀',
+          crown: '🧸👑',
+          cape: '🧸🦸',
+          wizard: '🧸🧙',
+          astronaut: '🧸👨‍🚀',
+          ninja: '🧸🥷',
+          pirate: '🧸🏴‍☠️',
+          chef: '🧸👨‍🍳',
+          doctor: '🧸👨‍⚕️'
+        };
+        return outfitEmojis[outfit] || '🧸';
+      }
+      
+      // Update bear position
+      function updateBearPosition() {
+        bear.style.left = bearPosition.x + 'px';
+        bear.style.top = bearPosition.y + 'px';
+      }
+      
+      // Move bear towards cursor
+      function moveTowardsCursor() {
+        const dx = lastCursorPosition.x - bearPosition.x;
+        const dy = lastCursorPosition.y - bearPosition.y;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        
+        if (distance > BEAR_CURSOR_FOLLOW_DISTANCE) {
+          // Move towards cursor
+          const moveX = (dx / distance) * BEAR_WALK_SPEED;
+          const moveY = (dy / distance) * BEAR_WALK_SPEED;
+          
+          bearPosition.x += moveX;
+          bearPosition.y += moveY;
+          
+          // Flip bear based on direction
+          if (moveX > 0) {
+            bear.style.transform = 'scaleX(1)';
+          } else if (moveX < 0) {
+            bear.style.transform = 'scaleX(-1)';
+          }
+          
+          bearState = 'walking';
+          bear.style.animation = 'bearWalk 0.8s steps(4) infinite';
+        } else {
+          // Close to cursor, go idle
+          if (bearState !== 'idle') {
+            bearState = 'idle';
+            bear.style.animation = 'bearIdle 2s ease-in-out infinite';
+            
+            // Set idle timer
+            if (idleTimer) clearTimeout(idleTimer);
+            idleTimer = setTimeout(() => {
+              if (bearState === 'idle') {
+                bearState = 'sleeping';
+                bear.style.animation = 'bearSleep 3s ease-in-out infinite';
+                
+                // Set sleep timer
+                if (sleepTimer) clearTimeout(sleepTimer);
+                sleepTimer = setTimeout(() => {
+                  bearState = 'walking';
+                  bear.style.animation = 'bearWalk 0.8s steps(4) infinite';
+                }, 10000); // Sleep for 10 seconds
+              }
+            }, BEAR_IDLE_TIMEOUT);
+          }
+        }
+        
+        // Keep bear on screen
+        bearPosition.x = Math.max(0, Math.min(window.innerWidth - 60, bearPosition.x));
+        bearPosition.y = Math.max(0, Math.min(window.innerHeight - 60, bearPosition.y));
+        
+        updateBearPosition();
+      }
+      
+      // Random walk behavior
+      function randomWalk() {
+        if (bearState === 'walking') {
+          // Random direction change
+          if (Math.random() < 0.02) { // 2% chance per frame
+            bearDirection.x = (Math.random() - 0.5) * 2;
+            bearDirection.y = (Math.random() - 0.5) * 2;
+          }
+          
+          bearPosition.x += bearDirection.x * BEAR_WALK_SPEED;
+          bearPosition.y += bearDirection.y * BEAR_WALK_SPEED;
+          
+          // Flip bear based on direction
+          if (bearDirection.x > 0) {
+            bear.style.transform = 'scaleX(1)';
+          } else if (bearDirection.x < 0) {
+            bear.style.transform = 'scaleX(-1)';
+          }
+          
+          // Keep bear on screen
+          bearPosition.x = Math.max(0, Math.min(window.innerWidth - 60, bearPosition.x));
+          bearPosition.y = Math.max(0, Math.min(window.innerHeight - 60, bearPosition.y));
+          
+          updateBearPosition();
+        }
+      }
+      
+      // Track cursor movement
+      document.addEventListener('mousemove', (e) => {
+        lastCursorPosition.x = e.clientX;
+        lastCursorPosition.y = e.clientY;
+        
+        // Wake up bear if sleeping
+        if (bearState === 'sleeping') {
+          bearState = 'walking';
+          bear.style.animation = 'bearWalk 0.8s steps(4) infinite';
+          if (sleepTimer) {
+            clearTimeout(sleepTimer);
+            sleepTimer = null;
+          }
+        }
+      });
+      
+      // Animation loop
+      function animateBear() {
+        // 70% chance to follow cursor, 30% chance to random walk
+        if (Math.random() < 0.7) {
+          moveTowardsCursor();
+        } else {
+          randomWalk();
+        }
+        
+        requestAnimationFrame(animateBear);
+      }
+      
+      // Start animation
+      animateBear();
+      
+      // Store bear reference for cleanup
+      window.walkingBearRef = bear;
+      
+      console.log('🚶 Walking bear created and started');
+    },
+    args: [currentOutfit]
+  }).catch(error => {
+    console.log('Could not create walking bear for tab:', tabId, error);
+  });
+  
+  // Store walking bear data
+  walkingBears.set(tabId, { 
+    bearId: `bear_${Date.now()}`, 
+    isActive: true, 
+    currentOutfit: currentOutfit 
+  });
+}
+
+function stopWalkingBear(tabId) {
+  console.log('🚶 Stopping walking bear for tab:', tabId);
+  
+  chrome.scripting.executeScript({
+    target: { tabId: tabId },
+    func: () => {
+      const bear = document.getElementById('walking-bear');
+      if (bear) {
+        bear.remove();
+        console.log('🚶 Walking bear removed');
+      }
+    }
+  }).catch(error => {
+    console.log('Could not remove walking bear for tab:', tabId, error);
+  });
+  
+  walkingBears.delete(tabId);
+}
+
 // Token Deduction Functions
 function deductTokensForDistraction(tabId) {
   console.log('🪙 Deducting tokens for distraction in tab:', tabId);
@@ -356,6 +621,9 @@ function startTokenAccumulation(tabId) {
     // Update token display
     updateTokenDisplay(tabId);
     
+    // Show bear token notification
+    showTokenNotificationBear(tabId, balance.tokens);
+    
     // Check for outfit unlocks
     checkOutfitUnlocks(tabId);
   }, TOKEN_INTERVAL);
@@ -615,6 +883,144 @@ function showDancingBear(tabId) {
     args: [currentOutfit]
   }).catch(error => {
     console.log('Could not show dancing bear for tab:', tabId, error);
+  });
+}
+
+// Token notification bear function
+function showTokenNotificationBear(tabId, tokenCount) {
+  console.log('🧸 Showing token notification bear for tab:', tabId, 'Tokens:', tokenCount);
+  
+  const closet = bearClosets.get(tabId);
+  const currentOutfit = closet ? closet.currentOutfit : 'default';
+  
+  chrome.scripting.executeScript({
+    target: { tabId: tabId },
+    func: (outfit, tokens) => {
+      // Remove any existing token notification bear
+      const existingBear = document.getElementById('token-notification-bear');
+      if (existingBear) {
+        existingBear.remove();
+      }
+      
+      // Get bear emoji based on outfit
+      function getBearEmoji(outfit) {
+        const outfitEmojis = {
+          default: '🧸',
+          hat: '🧸🎩',
+          glasses: '🧸🕶️',
+          bowtie: '🧸🎀',
+          crown: '🧸👑',
+          cape: '🧸🦸',
+          wizard: '🧸🧙',
+          astronaut: '🧸👨‍🚀',
+          ninja: '🧸🥷',
+          pirate: '🧸🏴‍☠️',
+          chef: '🧸👨‍🍳',
+          doctor: '🧸👨‍⚕️'
+        };
+        return outfitEmojis[outfit] || '🧸';
+      }
+      
+      // Create notification bear
+      const bear = document.createElement('div');
+      bear.id = 'token-notification-bear';
+      bear.style.cssText = `
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        width: 80px;
+        height: 80px;
+        z-index: 25000;
+        pointer-events: none;
+        font-size: 60px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        user-select: none;
+        animation: tokenBearSlideIn 0.8s ease-out;
+      `;
+      
+      bear.textContent = getBearEmoji(outfit);
+      
+      // Add notification animations
+      if (!document.getElementById('token-bear-animations')) {
+        const style = document.createElement('style');
+        style.id = 'token-bear-animations';
+        style.textContent = `
+          @keyframes tokenBearSlideIn {
+            0% { 
+              transform: translateX(100px) scale(0.5); 
+              opacity: 0; 
+            }
+            50% { 
+              transform: translateX(-10px) scale(1.1); 
+              opacity: 1; 
+            }
+            100% { 
+              transform: translateX(0px) scale(1); 
+              opacity: 1; 
+            }
+          }
+          
+          @keyframes tokenBearBounce {
+            0%, 100% { transform: translateY(0px); }
+            50% { transform: translateY(-10px); }
+          }
+          
+          @keyframes tokenBearSlideOut {
+            0% { 
+              transform: translateX(0px) scale(1); 
+              opacity: 1; 
+            }
+            100% { 
+              transform: translateX(100px) scale(0.5); 
+              opacity: 0; 
+            }
+          }
+        `;
+        document.head.appendChild(style);
+      }
+      
+      // Create token notification text
+      const notificationText = document.createElement('div');
+      notificationText.style.cssText = `
+        position: absolute;
+        top: -30px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: linear-gradient(135deg, #10b981, #059669);
+        color: white;
+        padding: 8px 12px;
+        border-radius: 20px;
+        font-size: 14px;
+        font-weight: bold;
+        white-space: nowrap;
+        box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3);
+        border: 2px solid #34d399;
+        animation: tokenBearBounce 1s ease-in-out infinite;
+      `;
+      notificationText.textContent = `+5 Tokens! (${tokens} total)`;
+      
+      bear.appendChild(notificationText);
+      document.body.appendChild(bear);
+      
+      // Auto-remove after 3 seconds
+      setTimeout(() => {
+        if (bear.parentNode) {
+          bear.style.animation = 'tokenBearSlideOut 0.5s ease-in';
+          setTimeout(() => {
+            if (bear.parentNode) {
+              bear.remove();
+            }
+          }, 500);
+        }
+      }, 3000);
+      
+      console.log('🧸 Token notification bear displayed');
+    },
+    args: [currentOutfit, tokenCount]
+  }).catch(error => {
+    console.log('Could not show token notification bear for tab:', tabId, error);
   });
 }
 
