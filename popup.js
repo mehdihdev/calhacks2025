@@ -5,6 +5,9 @@ const startWorkBtn = document.getElementById("start-work");
 const startBreakBtn = document.getElementById("start-break");
 const pauseTimerBtn = document.getElementById("pause-timer");
 const resumeTimerBtn = document.getElementById("resume-timer");
+const openClosetBtn = document.getElementById("open-closet");
+const tokenCountEl = document.getElementById("token-count");
+const bearNameEl = document.getElementById("bear-name");
 
 chrome.storage.sync.get(["backendUrl"], ({ backendUrl }) => {
   backendEl.value = backendUrl || "http://localhost:4000";
@@ -31,6 +34,14 @@ startBreakBtn.addEventListener("click", () => {
     if (response && response.ok) {
       startBreakBtn.textContent = "Started!";
       setTimeout(() => (startBreakBtn.textContent = "Start Break (5m)"), 1000);
+    } else if (response && !response.ok) {
+      // Security system blocked the break
+      startBreakBtn.textContent = "Blocked!";
+      startBreakBtn.style.background = "#dc2626"; // Red background
+      setTimeout(() => {
+        startBreakBtn.textContent = "Start Break (5m)";
+        startBreakBtn.style.background = "#059669"; // Reset to green
+      }, 2000);
     }
   });
 });
@@ -53,6 +64,37 @@ resumeTimerBtn.addEventListener("click", () => {
   });
 });
 
+// Virtual closet event listener
+openClosetBtn.addEventListener("click", () => {
+  chrome.runtime.sendMessage({ type: "OPEN_CLOSET" }, (response) => {
+    if (response && response.ok) {
+      openClosetBtn.textContent = "Opening...";
+      setTimeout(() => (openClosetBtn.textContent = "Open Bear Closet"), 1000);
+    }
+  });
+});
+
+// Update bear name
+function updateBearName() {
+  chrome.runtime.sendMessage({ type: "GET_BEAR_NAME" }, (response) => {
+    if (response && response.bearName) {
+      bearNameEl.textContent = response.bearName;
+    } else {
+      bearNameEl.textContent = "Virtual Closet";
+    }
+  });
+}
+
+// Update token count
+function updateTokenCount() {
+  chrome.runtime.sendMessage({ type: "GET_TOKEN_COUNT" }, (response) => {
+    if (response && response.tokens !== undefined) {
+      tokenCountEl.textContent = `🪙 Tokens: ${response.tokens}`;
+    } else {
+      tokenCountEl.textContent = "🪙 Tokens: Loading...";
+    }
+  });
+}
 
 function renderStatus(s) {
   if (!s) {
@@ -79,6 +121,9 @@ function loading(msg = "Classifying…") {
 // Immediately classify the active tab on popup open
 document.addEventListener("DOMContentLoaded", () => {
   loading();
+  updateTokenCount(); // Update token count on popup open
+  updateBearName(); // Update bear name on popup open
+  
   chrome.runtime.sendMessage({ type: "CLASSIFY_ACTIVE" }, (resp) => {
     if (!resp || resp.ok === false) {
       // Try to at least show the last-known status if present

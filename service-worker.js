@@ -41,6 +41,640 @@ const POMODORO_WORK_TIME = 25 * 60 * 1000; // 25 minutes in milliseconds
 const POMODORO_BREAK_TIME = 5 * 60 * 1000; // 5 minutes in milliseconds
 const globalBreakMode = new Map(); // tabId -> boolean (true if in break mode)
 
+// ---- Break Security System ----
+const breakHistory = new Map(); // tabId -> { lastSessionType, sessionCount, consecutiveBreaks }
+const MAX_CONSECUTIVE_BREAKS = 1; // Maximum consecutive breaks allowed
+
+// ---- Teddy Bear Mascot System ----
+const bearMascots = new Map(); // tabId -> { timerId, isActive, outfit }
+const BEAR_APPEAR_INTERVAL = 5 * 60 * 1000; // 5 minutes between appearances
+const BEAR_DISPLAY_DURATION = 8000; // 8 seconds display time
+const virtualBalances = new Map(); // tabId -> { tokens: number, coins: number }
+const tokenTimers = new Map(); // tabId -> { timerId, startTime, accumulatedMinutes }
+const TOKEN_INTERVAL = 10 * 60 * 1000; // 10 minutes in milliseconds
+
+// Virtual Closet System
+const BEAR_OUTFITS = {
+  default: { name: "Default Bear", cost: 0, emoji: "🧸", unlocked: true },
+  hat: { name: "Top Hat", cost: 5, emoji: "🎩", unlocked: false },
+  glasses: { name: "Cool Glasses", cost: 8, emoji: "🕶️", unlocked: false },
+  bowtie: { name: "Bow Tie", cost: 10, emoji: "🎀", unlocked: false },
+  crown: { name: "Royal Crown", cost: 15, emoji: "👑", unlocked: false },
+  cape: { name: "Super Cape", cost: 20, emoji: "🦸", unlocked: false },
+  wizard: { name: "Wizard Hat", cost: 25, emoji: "🧙", unlocked: false },
+  astronaut: { name: "Space Helmet", cost: 30, emoji: "👨‍🚀", unlocked: false },
+  ninja: { name: "Ninja Mask", cost: 35, emoji: "🥷", unlocked: false },
+  pirate: { name: "Pirate Hat", cost: 40, emoji: "🏴‍☠️", unlocked: false },
+  chef: { name: "Chef Hat", cost: 45, emoji: "👨‍🍳", unlocked: false },
+  doctor: { name: "Doctor Coat", cost: 50, emoji: "👨‍⚕️", unlocked: false }
+};
+
+const bearClosets = new Map(); // tabId -> { unlockedOutfits: Set, currentOutfit: string }
+const bearNames = new Map(); // tabId -> bearName
+
+// Token Deduction Functions
+function deductTokensForDistraction(tabId) {
+  console.log('🪙 Deducting tokens for distraction in tab:', tabId);
+  
+  const balance = virtualBalances.get(tabId);
+  if (balance && balance.tokens > 0) {
+    balance.tokens = Math.max(0, balance.tokens - 1); // Deduct 1 token, minimum 0
+    virtualBalances.set(tabId, balance);
+    
+    console.log('🪙 Tokens deducted! New balance:', balance.tokens, 'for tab:', tabId);
+    
+    // Update token display
+    updateTokenDisplay(tabId);
+    
+    // Show token deduction popup
+    showTokenDeductionPopup(tabId, balance.tokens);
+    
+    return balance.tokens;
+  }
+  
+  return balance ? balance.tokens : 0;
+}
+
+function showTokenDeductionPopup(tabId, newTokenCount) {
+  console.log('🪙 Showing token deduction popup for tab:', tabId);
+  
+  chrome.scripting.executeScript({
+    target: { tabId: tabId },
+    func: (newTokenCount) => {
+      // Remove any existing token deduction popup
+      const existingPopup = document.getElementById('token-deduction-popup');
+      if (existingPopup) {
+        existingPopup.remove();
+      }
+      
+      // Create large popup overlay
+      const popupOverlay = document.createElement('div');
+      popupOverlay.id = 'token-deduction-popup';
+      popupOverlay.style.cssText = `
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0, 0, 0, 0.8);
+        z-index: 25000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-family: Arial, sans-serif;
+        animation: tokenDeductionFadeIn 0.5s ease-out;
+      `;
+      
+      // Create popup content
+      const popupContent = document.createElement('div');
+      popupContent.style.cssText = `
+        background: linear-gradient(135deg, #dc2626, #b91c1c);
+        border-radius: 30px;
+        padding: 60px 80px;
+        text-align: center;
+        box-shadow: 0 20px 60px rgba(220, 38, 38, 0.5);
+        border: 4px solid #fecaca;
+        animation: tokenDeductionBounce 0.8s ease-out;
+        max-width: 500px;
+        width: 90%;
+      `;
+      
+      popupContent.innerHTML = `
+        <div style="font-size: 120px; margin-bottom: 20px; animation: tokenDeductionShake 0.5s ease-in-out;">🪙</div>
+        <div style="font-size: 80px; font-weight: bold; color: white; margin-bottom: 20px; text-shadow: 2px 2px 4px rgba(0,0,0,0.5);">-1 TOKEN</div>
+        <div style="font-size: 32px; color: #fecaca; margin-bottom: 10px; font-weight: bold;">DISTRACTION PENALTY!</div>
+        <div style="font-size: 24px; color: #fecaca; margin-bottom: 20px;">Get back to work!</div>
+        <div style="font-size: 20px; color: #fecaca; opacity: 0.8;">Remaining tokens: ${newTokenCount}</div>
+      `;
+      
+      // Add animations
+      if (!document.getElementById('token-deduction-animations')) {
+        const style = document.createElement('style');
+        style.id = 'token-deduction-animations';
+        style.textContent = `
+          @keyframes tokenDeductionFadeIn {
+            0% { opacity: 0; }
+            100% { opacity: 1; }
+          }
+          
+          @keyframes tokenDeductionBounce {
+            0% { transform: scale(0.3) rotate(-10deg); opacity: 0; }
+            50% { transform: scale(1.1) rotate(5deg); }
+            100% { transform: scale(1) rotate(0deg); opacity: 1; }
+          }
+          
+          @keyframes tokenDeductionShake {
+            0%, 100% { transform: translateX(0); }
+            25% { transform: translateX(-10px) rotate(-5deg); }
+            75% { transform: translateX(10px) rotate(5deg); }
+          }
+        `;
+        document.head.appendChild(style);
+      }
+      
+      popupOverlay.appendChild(popupContent);
+      document.body.appendChild(popupOverlay);
+      
+      // Auto-remove popup after 3 seconds
+      setTimeout(() => {
+        if (popupOverlay.parentNode) {
+          popupOverlay.style.animation = 'tokenDeductionFadeIn 0.5s ease-out reverse';
+          setTimeout(() => {
+            if (popupOverlay.parentNode) {
+              popupOverlay.remove();
+            }
+          }, 500);
+        }
+      }, 3000);
+      
+      console.log('🪙 Token deduction popup displayed');
+    },
+    args: [newTokenCount]
+  }).catch(error => {
+    console.log('Could not show token deduction popup for tab:', tabId, error);
+  });
+}
+
+// Bear Naming Functions
+function promptForBearName(tabId) {
+  console.log('🧸 Prompting for bear name for tab:', tabId);
+  
+  chrome.scripting.executeScript({
+    target: { tabId: tabId },
+    func: () => {
+      const bearName = prompt("What would you like to name your productivity bear? 🧸", "Buddy");
+      if (bearName && bearName.trim()) {
+        // Store the name and send it back to service worker
+        chrome.runtime.sendMessage({
+          type: "BEAR_NAMED",
+          bearName: bearName.trim()
+        });
+      }
+    }
+  }).catch(error => {
+    console.log('Could not prompt for bear name for tab:', tabId, error);
+  });
+}
+
+function setBearName(tabId, bearName) {
+  bearNames.set(tabId, bearName);
+  // Also store in chrome storage for persistence
+  chrome.storage.sync.set({ [`bearName_${tabId}`]: bearName });
+  console.log('🧸 Bear named:', bearName, 'for tab:', tabId);
+}
+
+function getBearName(tabId) {
+  return bearNames.get(tabId) || 'Buddy'; // Default name
+}
+
+// Virtual Closet Functions
+function initializeBearCloset(tabId) {
+  if (!bearClosets.has(tabId)) {
+    bearClosets.set(tabId, {
+      unlockedOutfits: new Set(['default']), // Start with default outfit
+      currentOutfit: 'default'
+    });
+  }
+}
+
+function checkOutfitUnlocks(tabId) {
+  const balance = virtualBalances.get(tabId);
+  const closet = bearClosets.get(tabId);
+  
+  if (!balance || !closet) return;
+  
+  // Check each outfit for unlocking
+  Object.entries(BEAR_OUTFITS).forEach(([outfitId, outfit]) => {
+    if (!outfit.unlocked && balance.tokens >= outfit.cost) {
+      closet.unlockedOutfits.add(outfitId);
+      BEAR_OUTFITS[outfitId].unlocked = true;
+      
+      // Show unlock notification
+      showOutfitUnlockedNotification(tabId, outfit);
+    }
+  });
+}
+
+function showOutfitUnlockedNotification(tabId, outfit) {
+  chrome.scripting.executeScript({
+    target: { tabId: tabId },
+    func: (outfitName, outfitEmoji) => {
+      const notification = document.createElement('div');
+      notification.style.cssText = `
+        position: fixed;
+        top: 100px;
+        right: 20px;
+        background: linear-gradient(135deg, #FFD700, #FFA500);
+        color: #8B4513;
+        padding: 12px 16px;
+        border-radius: 20px;
+        font-family: Arial, sans-serif;
+        font-size: 14px;
+        font-weight: bold;
+        z-index: 15000;
+        box-shadow: 0 6px 20px rgba(255, 215, 0, 0.5);
+        border: 3px solid #FFD700;
+        animation: outfitUnlocked 3s ease-in-out;
+        max-width: 250px;
+        text-align: center;
+      `;
+      
+      notification.innerHTML = `
+        <div style="font-size: 20px; margin-bottom: 4px;">🎉</div>
+        <div style="font-size: 16px;">${outfitEmoji}</div>
+        <div style="margin-top: 4px;">${outfitName} Unlocked!</div>
+        <div style="font-size: 12px; margin-top: 2px;">Check your closet!</div>
+      `;
+      
+      // Add outfit unlocked animation
+      if (!document.getElementById('outfit-animation')) {
+        const style = document.createElement('style');
+        style.id = 'outfit-animation';
+        style.textContent = `
+          @keyframes outfitUnlocked {
+            0% { transform: translateX(100px) scale(0.8); opacity: 0; }
+            20% { transform: translateX(0px) scale(1.1); opacity: 1; }
+            80% { transform: translateX(0px) scale(1); opacity: 1; }
+            100% { transform: translateX(100px) scale(0.8); opacity: 0; }
+          }
+        `;
+        document.head.appendChild(style);
+      }
+      
+      document.body.appendChild(notification);
+      
+      // Remove notification after 3 seconds
+      setTimeout(() => {
+        if (notification.parentNode) {
+          notification.remove();
+        }
+      }, 3000);
+    },
+    args: [outfit.name, outfit.emoji]
+  }).catch(error => {
+    console.log('Could not show outfit unlocked notification for tab:', tabId, error);
+  });
+}
+
+// Token System Functions
+function initializeTokenSystem(tabId) {
+  if (!virtualBalances.has(tabId)) {
+    virtualBalances.set(tabId, {
+      tokens: 10, // Starting tokens
+      coins: 50   // Starting coins
+    });
+  }
+  
+  // Initialize bear closet
+  initializeBearCloset(tabId);
+  
+  // Show token display
+  showTokenDisplay(tabId);
+}
+
+function startTokenAccumulation(tabId) {
+  console.log('🪙 Starting token accumulation for tab:', tabId);
+  
+  // Stop any existing token timer
+  stopTokenAccumulation(tabId);
+  
+  // Initialize token system
+  initializeTokenSystem(tabId);
+  
+  const startTime = Date.now();
+  let accumulatedMinutes = 0;
+  
+  // Create token accumulation timer
+  const timerId = setInterval(() => {
+    accumulatedMinutes += 10; // Add 10 minutes
+    const balance = virtualBalances.get(tabId);
+    balance.tokens += 5; // Add 5 tokens for every 10 minutes
+    virtualBalances.set(tabId, balance);
+    
+    console.log('🪙 Token earned! Total tokens:', balance.tokens, 'for tab:', tabId);
+    
+    // Update token display
+    updateTokenDisplay(tabId);
+    
+    // Check for outfit unlocks
+    checkOutfitUnlocks(tabId);
+  }, TOKEN_INTERVAL);
+  
+  tokenTimers.set(tabId, { timerId, startTime, accumulatedMinutes });
+}
+
+function stopTokenAccumulation(tabId) {
+  const tokenData = tokenTimers.get(tabId);
+  if (tokenData) {
+    console.log('🪙 Stopping token accumulation for tab:', tabId);
+    clearInterval(tokenData.timerId);
+    tokenTimers.delete(tabId);
+  }
+}
+
+function showTokenDisplay(tabId) {
+  // Tokens are now integrated into the Pomodoro timer, so this function is simplified
+  // Just initialize the global token count for the timer to use
+  chrome.scripting.executeScript({
+    target: { tabId: tabId },
+    func: () => {
+      // Set initial token count for the Pomodoro timer
+      window.currentTokenCount = 10;
+      
+      console.log('🪙 Token system initialized for Pomodoro timer');
+    }
+  }).catch(error => {
+    console.log('Could not initialize token system for tab:', tabId, error);
+  });
+}
+
+function updateTokenDisplay(tabId) {
+  const balance = virtualBalances.get(tabId);
+  if (balance) {
+    chrome.scripting.executeScript({
+      target: { tabId: tabId },
+      func: (tokens) => {
+        // Update token count in Pomodoro timer if it exists
+        const tokenCountEl = document.getElementById('token-count');
+        if (tokenCountEl) {
+          tokenCountEl.textContent = tokens;
+        }
+        
+        // Also update the global token count for the timer
+        window.currentTokenCount = tokens;
+        
+        // Update standalone token display if it exists (fallback)
+        if (window.updateTokenDisplay) {
+          window.updateTokenDisplay(tokens);
+        }
+      },
+      args: [balance.tokens]
+    }).catch(error => {
+      console.log('Could not update token display for tab:', tabId, error);
+    });
+  }
+}
+
+
+// Teddy Bear Mascot Functions
+function initializeVirtualBalance(tabId) {
+  if (!virtualBalances.has(tabId)) {
+    virtualBalances.set(tabId, {
+      tokens: 10, // Starting tokens
+      coins: 50   // Starting coins
+    });
+  }
+}
+
+function startBearMascot(tabId) {
+  console.log('🧸 Starting teddy bear mascot for tab:', tabId);
+  
+  // Stop any existing bear mascot
+  stopBearMascot(tabId);
+  
+  // Initialize virtual balance
+  initializeVirtualBalance(tabId);
+  
+  // Show bear immediately when focus session starts
+  showDancingBear(tabId);
+  
+  // Create 5-minute interval timer for subsequent appearances
+  const timerId = setInterval(() => {
+    // Only show bear if not in break mode and tab is active
+    if (!globalBreakMode.get(tabId)) {
+      showDancingBear(tabId);
+    }
+  }, BEAR_APPEAR_INTERVAL); // Every 5 minutes exactly
+  
+  bearMascots.set(tabId, { timerId, isActive: true, outfit: 'default' });
+}
+
+function stopBearMascot(tabId) {
+  const bearData = bearMascots.get(tabId);
+  if (bearData) {
+    console.log('🧸 Stopping teddy bear mascot for tab:', tabId);
+    clearInterval(bearData.timerId);
+    bearMascots.delete(tabId);
+    
+    // Remove any existing bear from the page
+    chrome.scripting.executeScript({
+      target: { tabId: tabId },
+      func: () => {
+        // Define removeDancingBear if not already defined
+        if (!window.removeDancingBear) {
+          window.removeDancingBear = function() {
+            const existingBear = document.getElementById('dancing-bear');
+            if (existingBear) {
+              existingBear.remove();
+              console.log('🧸 Dancing teddy bear removed');
+            }
+          };
+        }
+        
+        // Now remove the bear
+        window.removeDancingBear();
+      }
+    }).catch(error => {
+      console.log('Could not remove bear mascot for tab:', tabId, error);
+    });
+  }
+}
+
+function showDancingBear(tabId) {
+  console.log('🧸 Showing dancing bear for tab:', tabId);
+  
+  // Get current outfit from closet
+  const closet = bearClosets.get(tabId);
+  const currentOutfit = closet ? closet.currentOutfit : 'default';
+  
+  // First inject the bear functions, then create the bear
+  chrome.scripting.executeScript({
+    target: { tabId: tabId },
+    func: (outfit) => {
+      // Define bear functions if not already defined
+      if (!window.createDancingBear) {
+        window.createDancingBear = function(currentOutfit = 'default') {
+          console.log('🧸 Creating dancing teddy bear');
+          
+          // Remove any existing bear
+          window.removeDancingBear();
+          
+          // Create bear container
+          const bearContainer = document.createElement('div');
+          bearContainer.id = 'dancing-bear';
+          bearContainer.style.cssText = `
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 15000;
+            pointer-events: none;
+            animation: bearDance 3s ease-in-out infinite;
+          `;
+          
+          // Create teddy bear using CSS and emoji with outfit
+          const bearEmoji = currentOutfit === 'default' ? '🧸' : 
+            (currentOutfit === 'hat' ? '🧸🎩' :
+            (currentOutfit === 'glasses' ? '🧸🕶️' :
+            (currentOutfit === 'bowtie' ? '🧸🎀' :
+            (currentOutfit === 'crown' ? '🧸👑' :
+            (currentOutfit === 'cape' ? '🧸🦸' :
+            (currentOutfit === 'wizard' ? '🧸🧙' :
+            (currentOutfit === 'astronaut' ? '🧸👨‍🚀' :
+            (currentOutfit === 'ninja' ? '🧸🥷' :
+            (currentOutfit === 'pirate' ? '🧸🏴‍☠️' :
+            (currentOutfit === 'chef' ? '🧸👨‍🍳' :
+            (currentOutfit === 'doctor' ? '🧸👨‍⚕️' : '🧸')))))))))));
+          
+          bearContainer.innerHTML = `
+            <div style="font-size: 60px; text-align: center; margin-bottom: 10px;">${bearEmoji}</div>
+            <div id="bear-speech-bubble" style="
+              background: white;
+              border: 2px solid #8B4513;
+              border-radius: 20px;
+              padding: 10px 15px;
+              font-family: Arial, sans-serif;
+              font-size: 14px;
+              font-weight: bold;
+              color: #8B4513;
+              text-align: center;
+              box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+              position: relative;
+              max-width: 200px;
+              word-wrap: break-word;
+            ">
+              <div style="position: absolute; bottom: -8px; left: 50%; transform: translateX(-50%); width: 0; height: 0; border-left: 8px solid transparent; border-right: 8px solid transparent; border-top: 8px solid white;"></div>
+              <div style="position: absolute; bottom: -10px; left: 50%; transform: translateX(-50%); width: 0; height: 0; border-left: 9px solid transparent; border-right: 9px solid transparent; border-top: 9px solid #8B4513;"></div>
+              <span id="bear-message">You're doing amazing! Keep it up! 🌟</span>
+            </div>
+          `;
+          
+          // Add bear dance animation
+          if (!document.getElementById('bear-animation')) {
+            const style = document.createElement('style');
+            style.id = 'bear-animation';
+            style.textContent = `
+              @keyframes bearDance {
+                0% { transform: translate(-50%, -50%) rotate(0deg) scale(1); }
+                25% { transform: translate(-50%, -50%) rotate(5deg) scale(1.1); }
+                50% { transform: translate(-50%, -50%) rotate(0deg) scale(1); }
+                75% { transform: translate(-50%, -50%) rotate(-5deg) scale(1.1); }
+                100% { transform: translate(-50%, -50%) rotate(0deg) scale(1); }
+              }
+              @keyframes bearBounce {
+                0%, 100% { transform: translateY(0px); }
+                50% { transform: translateY(-10px); }
+              }
+            `;
+            document.head.appendChild(style);
+          }
+          
+          // Encouraging messages
+          const encouragingMessages = [
+            "You're doing amazing! Keep it up! 🌟",
+            "Stay focused! You've got this! 💪",
+            "Great work! Keep going! 🚀",
+            "You're on fire! Don't stop! 🔥",
+            "Amazing progress! Keep it up! ⭐",
+            "You're crushing it! Stay focused! 🎯",
+            "Fantastic work! You're unstoppable! 🌈",
+            "Keep going! You're doing great! 💎",
+            "Stay strong! You're almost there! 🏆",
+            "You're a productivity champion! 🥇"
+          ];
+          
+          // Set random encouraging message
+          const randomMessage = encouragingMessages[Math.floor(Math.random() * encouragingMessages.length)];
+          const messageEl = bearContainer.querySelector('#bear-message');
+          if (messageEl) {
+            messageEl.textContent = randomMessage;
+          }
+          
+          document.body.appendChild(bearContainer);
+          
+          // Remove bear after display duration
+          setTimeout(() => {
+            window.removeDancingBear();
+          }, 8000);
+          
+          console.log('🧸 Dancing teddy bear created with message:', randomMessage);
+        };
+        
+        window.removeDancingBear = function() {
+          const existingBear = document.getElementById('dancing-bear');
+          if (existingBear) {
+            existingBear.remove();
+            console.log('🧸 Dancing teddy bear removed');
+          }
+        };
+      }
+      
+      // Now create the bear with current outfit
+      window.createDancingBear(outfit);
+    },
+    args: [currentOutfit]
+  }).catch(error => {
+    console.log('Could not show dancing bear for tab:', tabId, error);
+  });
+}
+
+// Break security helper functions
+function initializeBreakHistory(tabId) {
+  if (!breakHistory.has(tabId)) {
+    breakHistory.set(tabId, {
+      lastSessionType: null, // 'work' or 'break'
+      sessionCount: 0,
+      consecutiveBreaks: 0
+    });
+  }
+}
+
+function updateBreakHistory(tabId, sessionType) {
+  initializeBreakHistory(tabId);
+  const history = breakHistory.get(tabId);
+  
+  if (sessionType === 'break') {
+    if (history.lastSessionType === 'break') {
+      history.consecutiveBreaks++;
+    } else {
+      history.consecutiveBreaks = 1; // Reset to 1 for first break
+    }
+  } else if (sessionType === 'work') {
+    history.consecutiveBreaks = 0; // Reset consecutive breaks when work starts
+  }
+  
+  history.lastSessionType = sessionType;
+  history.sessionCount++;
+  
+  console.log('🔒 Break history updated for tab:', tabId, history);
+}
+
+function canStartBreak(tabId) {
+  initializeBreakHistory(tabId);
+  const history = breakHistory.get(tabId);
+  
+  // Allow break if:
+  // 1. No previous sessions (first session)
+  // 2. Last session was work
+  // 3. Consecutive breaks haven't exceeded limit
+  const canBreak = history.lastSessionType === null || 
+                   history.lastSessionType === 'work' || 
+                   history.consecutiveBreaks < MAX_CONSECUTIVE_BREAKS;
+  
+  console.log('🔒 Can start break for tab:', tabId, 'Result:', canBreak, 'History:', history);
+  return canBreak;
+}
+
+function getBreakBlockReason(tabId) {
+  initializeBreakHistory(tabId);
+  const history = breakHistory.get(tabId);
+  
+  if (history.lastSessionType === 'break' && history.consecutiveBreaks >= MAX_CONSECUTIVE_BREAKS) {
+    return `You've already taken ${history.consecutiveBreaks} break(s) in a row! Complete a work session first.`;
+  }
+  return null;
+}
+
 // Start persistent Fish berating for a tab
 function startPersistentFish(tabId, category) {
   console.log('🐟 Starting persistent Fish for tab:', tabId);
@@ -54,8 +688,15 @@ function startPersistentFish(tabId, category) {
   // Clear any existing timer
   stopPersistentFish(tabId);
   
+  // Stop teddy bear mascot when Fish berating starts
+  stopBearMascot(tabId);
+  
+  // Stop token accumulation when Fish berating starts (user is distracted)
+  stopTokenAccumulation(tabId);
+  
   // Track berating count for this tab
   let beratingCount = 0;
+  let tokensDeducted = false; // Track if tokens have been deducted for this session
   
   // Set up recurring Fish berating every 3 seconds
   const timerId = setInterval(async () => {
@@ -79,6 +720,12 @@ function startPersistentFish(tabId, category) {
       if (result && !result.productive) {
         // Increment berating count
         beratingCount++;
+        
+        // Deduct tokens only on the first berating (when user first gets distracted)
+        if (!tokensDeducted) {
+          deductTokensForDistraction(tabId);
+          tokensDeducted = true;
+        }
         
         // Add Fish prefix every 3rd berating to reduce repetition
         const addFishPrefix = (beratingCount % 3 === 1);
@@ -120,6 +767,9 @@ function stopPersistentFish(tabId) {
       console.log('Could not stop speech synthesis for tab:', tabId, error);
     });
   }
+  
+  // Also stop teddy bear mascot
+  stopBearMascot(tabId);
 }
 
 // Stop all persistent Fish activity (emergency stop)
@@ -148,7 +798,26 @@ function stopAllPersistentFish() {
 // ---- Pomodoro Timer Functions ----
 function startPomodoroTimer(tabId, isWorkSession = true) {
   console.log('🍅 Starting Pomodoro timer for tab:', tabId, 'Work session:', isWorkSession);
-  
+
+  // Security check for break sessions
+  if (!isWorkSession && !canStartBreak(tabId)) {
+    const reason = getBreakBlockReason(tabId);
+    console.log('🔒 Break blocked for tab:', tabId, 'Reason:', reason);
+    
+    // Show security notification
+    chrome.scripting.executeScript({
+      target: { tabId: tabId },
+      func: (reason) => {
+        showSecurityNotification(reason);
+      },
+      args: [reason]
+    }).catch(error => {
+      console.log('Could not show security notification for tab:', tabId, error);
+    });
+    
+    return false; // Indicate that timer was not started
+  }
+
   // Stop any existing timer for this tab
   stopPomodoroTimer(tabId);
   
@@ -164,12 +833,15 @@ function startPomodoroTimer(tabId, isWorkSession = true) {
     stopPersistentFish(tabId);
   }
   
+  // Get current token balance
+  const balance = virtualBalances.get(tabId) || { tokens: 10, coins: 50 };
+  
   // First, inject the Pomodoro timer functions
   chrome.scripting.executeScript({
     target: { tabId: tabId },
     func: () => {
       // Define Pomodoro timer functions
-      window.createPomodoroTimer = function(duration, isWorkSession) {
+      window.createPomodoroTimer = function(duration, isWorkSession, currentTokens = 10) {
         console.log('🍅 Creating Pomodoro timer:', duration, 'Work session:', isWorkSession);
         
         // Remove any existing timer
@@ -209,10 +881,20 @@ function startPomodoroTimer(tabId, isWorkSession = true) {
           height: 50px;
         `;
         
-        // Add timer content with resize handle
+        // Add timer content with resize handle and token count
         timer.innerHTML = `
-          <span id="timer-emoji" style="font-size: 12px;">${isWorkSession ? '🍅' : '☕'}</span>
-          <span id="timer-display" style="font-family: 'Courier New', monospace; font-size: 16px;">${initialTime}</span>
+          <div style="display: flex; flex-direction: column; align-items: center; gap: 2px;">
+            <div style="display: flex; align-items: center; gap: 4px;">
+              <span id="timer-emoji" style="font-size: 12px;">${isWorkSession ? '🍅' : '☕'}</span>
+              <span id="timer-display" style="font-family: 'Courier New', monospace; font-size: 16px;">${initialTime}</span>
+            </div>
+            ${isWorkSession ? `
+              <div style="display: flex; align-items: center; gap: 2px; font-size: 10px; opacity: 0.9;">
+                <span style="font-size: 10px;">🪙</span>
+                <span id="token-count">${currentTokens}</span>
+              </div>
+            ` : ''}
+          </div>
           <div id="resize-handle" style="position: absolute; bottom: 2px; right: 2px; width: 12px; height: 12px; background: rgba(255,255,255,0.4); border-radius: 2px; cursor: se-resize; border: 1px solid rgba(255,255,255,0.2);"></div>
         `;
         
@@ -413,6 +1095,14 @@ function startPomodoroTimer(tabId, isWorkSession = true) {
           const emojiEl = timer.querySelector('#timer-emoji');
           if (emojiEl) emojiEl.style.fontSize = Math.max(8, emojiSize) + 'px';
           timerDisplay.style.fontSize = Math.max(10, displaySize) + 'px';
+          
+          // Update token count if it exists (for work sessions)
+          const tokenCountEl = timer.querySelector('#token-count');
+          if (tokenCountEl && isWorkSession) {
+            // Get current token count from virtual balance
+            const currentTokens = window.currentTokenCount || 10;
+            tokenCountEl.textContent = currentTokens;
+          }
         }
       };
       
@@ -559,16 +1249,80 @@ function startPomodoroTimer(tabId, isWorkSession = true) {
         }, 5000);
       };
       
+      window.showSecurityNotification = function(reason) {
+        console.log('🔒 Showing security notification:', reason);
+        
+        // Create security notification
+        const notification = document.createElement('div');
+        notification.style.cssText = `
+          position: fixed;
+          top: 50%;
+          left: 50%;
+          transform: translate(-50%, -50%);
+          background: linear-gradient(135deg, #dc2626, #b91c1c);
+          color: white;
+          padding: 30px;
+          border-radius: 15px;
+          font-family: Arial, sans-serif;
+          font-size: 20px;
+          font-weight: bold;
+          text-align: center;
+          z-index: 20000;
+          box-shadow: 0 8px 32px rgba(220, 38, 38, 0.5);
+          border: 3px solid #dc2626;
+          animation: securityAlert 2s ease-in-out;
+          max-width: 400px;
+          line-height: 1.4;
+        `;
+        
+        notification.innerHTML = `
+          <div style="font-size: 48px; margin-bottom: 15px;">🔒</div>
+          <div>Break Security Alert!</div>
+          <div style="font-size: 16px; margin-top: 15px; opacity: 0.9;">
+            ${reason}
+          </div>
+          <div style="font-size: 14px; margin-top: 20px; opacity: 0.8;">
+            Complete a work session to earn your break! 🍅
+          </div>
+        `;
+        
+        // Add security alert animation
+        if (!document.getElementById('security-animation')) {
+          const style = document.createElement('style');
+          style.id = 'security-animation';
+          style.textContent = `
+            @keyframes securityAlert {
+              0% { transform: translate(-50%, -50%) scale(0.5); opacity: 0; }
+              20% { transform: translate(-50%, -50%) scale(1.1); opacity: 1; }
+              40% { transform: translate(-50%, -50%) scale(0.95); opacity: 1; }
+              60% { transform: translate(-50%, -50%) scale(1.05); opacity: 1; }
+              80% { transform: translate(-50%, -50%) scale(0.98); opacity: 1; }
+              100% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+            }
+          `;
+          document.head.appendChild(style);
+        }
+        
+        document.body.appendChild(notification);
+        
+        // Remove notification after 6 seconds
+        setTimeout(() => {
+          if (notification.parentNode) {
+            notification.remove();
+          }
+        }, 6000);
+      };
+      
       console.log('🍅 Pomodoro timer functions injected');
     }
   }).then(() => {
     // Now create the timer
     chrome.scripting.executeScript({
       target: { tabId: tabId },
-      func: (duration, isWorkSession) => {
-        window.createPomodoroTimer(duration, isWorkSession);
+      func: (duration, isWorkSession, currentTokens) => {
+        window.createPomodoroTimer(duration, isWorkSession, currentTokens);
       },
-      args: [duration, isWorkSession]
+      args: [duration, isWorkSession, balance.tokens]
     }).catch(error => {
       console.log('Could not create Pomodoro timer for tab:', tabId, error);
     });
@@ -584,10 +1338,10 @@ function startPomodoroTimer(tabId, isWorkSession = true) {
     // Update timer display
     chrome.scripting.executeScript({
       target: { tabId: tabId },
-      func: (remaining, isWorkSession) => {
-        window.updatePomodoroTimer(remaining, isWorkSession);
+      func: (remaining, isWorkSession, currentTokens) => {
+        window.updatePomodoroTimer(remaining, isWorkSession, currentTokens);
       },
-      args: [remaining, isWorkSession]
+      args: [remaining, isWorkSession, balance.tokens]
     }).catch(error => {
       console.log('Could not update Pomodoro timer for tab:', tabId, error);
     });
@@ -625,6 +1379,22 @@ function startPomodoroTimer(tabId, isWorkSession = true) {
   }, 1000);
   
   pomodoroTimers.set(tabId, { timerId, startTime, duration, isActive: true, isWorkSession });
+  
+  // Update break history for security system
+  updateBreakHistory(tabId, isWorkSession ? 'work' : 'break');
+  
+  // Teddy bear mascot will appear every 5 minutes during work sessions
+  // (removed immediate appearance to avoid tacky behavior)
+  
+  // Prompt for bear name on first work session
+  if (isWorkSession && !bearNames.has(tabId)) {
+    promptForBearName(tabId);
+  }
+  
+  // Start token accumulation for work sessions
+  if (isWorkSession) {
+    startTokenAccumulation(tabId);
+  }
 }
 
 function stopPomodoroTimer(tabId) {
@@ -650,11 +1420,18 @@ function stopPomodoroTimer(tabId) {
     }).catch(error => {
       console.log('Could not pause Pomodoro timer for tab:', tabId, error);
     });
+    
+    // Stop token accumulation and bear mascot when timer is paused
+    stopTokenAccumulation(tabId);
+    stopBearMascot(tabId);
   }
 }
 
 function resumePomodoroTimer(tabId, timerData) {
   console.log('🍅 Resuming Pomodoro timer for tab:', tabId);
+  
+  // Get current token balance
+  const balance = virtualBalances.get(tabId) || { tokens: 10, coins: 50 };
   
   // Calculate remaining time
   const elapsed = Date.now() - timerData.startTime;
@@ -699,10 +1476,10 @@ function resumePomodoroTimer(tabId, timerData) {
     // Update timer display
     chrome.scripting.executeScript({
       target: { tabId: tabId },
-      func: (remaining, isWorkSession) => {
-        window.updatePomodoroTimer(remaining, isWorkSession);
+      func: (remaining, isWorkSession, currentTokens) => {
+        window.updatePomodoroTimer(remaining, isWorkSession, currentTokens);
       },
-      args: [remaining, timerData.isWorkSession]
+      args: [remaining, timerData.isWorkSession, balance.tokens]
     }).catch(error => {
       console.log('Could not update Pomodoro timer for tab:', tabId, error);
     });
@@ -799,6 +1576,7 @@ async function playBeratingAudio(category, targetTabId = null, addFishPrefix = t
       
       if (targetTab) {
         console.log('Injecting script into tab:', targetTab.id, targetTab.url);
+        
         chrome.scripting.executeScript({
           target: { tabId: targetTab.id },
           function: (message, addFishPrefix) => {
@@ -1071,7 +1849,7 @@ async function playBeratingAudio(category, targetTabId = null, addFishPrefix = t
               console.log('🍅 Compact Pomodoro timer created with initial time:', initialTime);
             }
             
-            function updatePomodoroTimer(remaining, isWorkSession) {
+            function updatePomodoroTimer(remaining, isWorkSession, currentTokens) {
               const timerDisplay = document.getElementById('timer-display');
               const timer = document.getElementById('pomodoro-timer');
               
@@ -1110,6 +1888,12 @@ async function playBeratingAudio(category, targetTabId = null, addFishPrefix = t
                   timer.style.animation = 'pulse 1s infinite';
                 } else {
                   timer.style.animation = 'none';
+                }
+                
+                // Update token count if it exists (for work sessions)
+                const tokenCountEl = timer.querySelector('#token-count');
+                if (tokenCountEl && isWorkSession && currentTokens !== undefined) {
+                  tokenCountEl.textContent = currentTokens;
                 }
               }
             }
@@ -1815,6 +2599,198 @@ function keepAlive() {
 // Start keep-alive when service worker starts
 keepAlive();
 
+// Load bear names from storage on startup
+chrome.storage.sync.get(null, (items) => {
+  Object.keys(items).forEach(key => {
+    if (key.startsWith('bearName_')) {
+      const tabId = parseInt(key.replace('bearName_', ''));
+      bearNames.set(tabId, items[key]);
+    }
+  });
+});
+
+// Virtual Closet UI Functions
+function openVirtualCloset(tabId) {
+  console.log('🧸 Opening virtual closet for tab:', tabId);
+  
+  const balance = virtualBalances.get(tabId);
+  const closet = bearClosets.get(tabId);
+  
+  if (!balance || !closet) {
+    console.log('🧸 No balance or closet found for tab:', tabId);
+    return;
+  }
+  
+  chrome.scripting.executeScript({
+    target: { tabId: tabId },
+    func: (outfits, unlockedOutfits, currentOutfit, tokens) => {
+      // Remove any existing closet
+      const existingCloset = document.getElementById('virtual-closet');
+      if (existingCloset) {
+        existingCloset.remove();
+      }
+      
+      // Create closet overlay
+      const closetOverlay = document.createElement('div');
+      closetOverlay.id = 'virtual-closet';
+      closetOverlay.style.cssText = `
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0, 0, 0, 0.8);
+        z-index: 20000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-family: Arial, sans-serif;
+      `;
+      
+      // Create closet content
+      const closetContent = document.createElement('div');
+      closetContent.style.cssText = `
+        background: linear-gradient(135deg, #8B4513, #A0522D);
+        border-radius: 20px;
+        padding: 30px;
+        max-width: 600px;
+        max-height: 80vh;
+        overflow-y: auto;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+        border: 3px solid #D2691E;
+      `;
+      
+      // Create header
+      const header = document.createElement('div');
+      header.style.cssText = `
+        text-align: center;
+        margin-bottom: 20px;
+        color: white;
+      `;
+      header.innerHTML = `
+        <h2 style="margin: 0; font-size: 24px;">🧸 Virtual Closet</h2>
+        <p style="margin: 10px 0; font-size: 16px;">🪙 Tokens: ${tokens}</p>
+        <p style="margin: 5px 0; font-size: 14px; opacity: 0.8;">Dress up your bear!</p>
+      `;
+      
+      // Create outfit grid
+      const outfitGrid = document.createElement('div');
+      outfitGrid.style.cssText = `
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+        gap: 15px;
+        margin-top: 20px;
+      `;
+      
+      // Add outfit items
+      Object.entries(outfits).forEach(([outfitId, outfit]) => {
+        const outfitItem = document.createElement('div');
+        outfitItem.style.cssText = `
+          background: ${unlockedOutfits.includes(outfitId) ? 'linear-gradient(135deg, #32CD32, #228B22)' : 'linear-gradient(135deg, #666, #444)'};
+          border-radius: 15px;
+          padding: 15px;
+          text-align: center;
+          cursor: ${unlockedOutfits.includes(outfitId) ? 'pointer' : 'not-allowed'};
+          border: 2px solid ${currentOutfit === outfitId ? '#FFD700' : 'transparent'};
+          opacity: ${unlockedOutfits.includes(outfitId) ? '1' : '0.6'};
+          transition: all 0.3s ease;
+        `;
+        
+        outfitItem.innerHTML = `
+          <div style="font-size: 30px; margin-bottom: 8px;">${outfit.emoji}</div>
+          <div style="color: white; font-weight: bold; font-size: 12px; margin-bottom: 4px;">${outfit.name}</div>
+          <div style="color: ${unlockedOutfits.includes(outfitId) ? '#FFD700' : '#ccc'}; font-size: 10px;">
+            ${unlockedOutfits.includes(outfitId) ? '🪙 ' + outfit.cost + ' tokens' : '🔒 Locked'}
+          </div>
+          ${currentOutfit === outfitId ? '<div style="color: #FFD700; font-size: 10px; margin-top: 4px;">✓ Equipped</div>' : ''}
+        `;
+        
+        if (unlockedOutfits.includes(outfitId)) {
+          outfitItem.addEventListener('click', () => {
+            // Equip the outfit
+            window.equipOutfit(outfitId);
+          });
+        }
+        
+        outfitGrid.appendChild(outfitItem);
+      });
+      
+      // Create close button
+      const closeButton = document.createElement('button');
+      closeButton.style.cssText = `
+        position: absolute;
+        top: 15px;
+        right: 15px;
+        background: #dc2626;
+        color: white;
+        border: none;
+        border-radius: 50%;
+        width: 30px;
+        height: 30px;
+        font-size: 16px;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      `;
+      closeButton.textContent = '×';
+      closeButton.addEventListener('click', () => {
+        closetOverlay.remove();
+      });
+      
+      // Define equip outfit function
+      window.equipOutfit = function(outfitId) {
+        // Update current outfit
+        window.currentOutfit = outfitId;
+        
+        // Update visual indication
+        outfitGrid.querySelectorAll('div').forEach(item => {
+          item.style.border = '2px solid transparent';
+        });
+        
+        // Highlight selected outfit
+        const selectedItem = outfitGrid.children[Object.keys(outfits).indexOf(outfitId)];
+        if (selectedItem) {
+          selectedItem.style.border = '2px solid #FFD700';
+          selectedItem.innerHTML = selectedItem.innerHTML.replace('✓ Equipped', '') + '<div style="color: #FFD700; font-size: 10px; margin-top: 4px;">✓ Equipped</div>';
+        }
+        
+        // Show success message
+        const successMsg = document.createElement('div');
+        successMsg.style.cssText = `
+          position: fixed;
+          top: 20px;
+          left: 50%;
+          transform: translateX(-50%);
+          background: #32CD32;
+          color: white;
+          padding: 10px 20px;
+          border-radius: 20px;
+          font-size: 14px;
+          z-index: 20001;
+        `;
+        successMsg.textContent = `🧸 Bear equipped with ${outfits[outfitId].name}!`;
+        document.body.appendChild(successMsg);
+        
+        setTimeout(() => {
+          successMsg.remove();
+        }, 2000);
+      };
+      
+      closetContent.appendChild(closeButton);
+      closetContent.appendChild(header);
+      closetContent.appendChild(outfitGrid);
+      closetOverlay.appendChild(closetContent);
+      document.body.appendChild(closetOverlay);
+      
+      console.log('🧸 Virtual closet opened');
+    },
+    args: [BEAR_OUTFITS, Array.from(closet.unlockedOutfits), closet.currentOutfit, balance.tokens]
+  }).catch(error => {
+    console.log('Could not open virtual closet for tab:', tabId, error);
+  });
+}
+
 // ---- Handle messages from content script (URL/title changes) ----
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // Reset keep-alive timer on any message
@@ -1885,10 +2861,17 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg?.type === "START_POMODORO") {
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
       if (tabs[0]) {
-        startPomodoroTimer(tabs[0].id, msg.isWorkSession !== false);
+        const success = startPomodoroTimer(tabs[0].id, msg.isWorkSession !== false);
+        if (success === false) {
+          // Timer was blocked by security system
+          sendResponse({ ok: false, error: "Break blocked by security system" });
+        } else {
+          sendResponse({ ok: true });
+        }
+      } else {
+        sendResponse({ ok: false, error: "No active tab found" });
       }
     });
-    sendResponse({ ok: true });
     return true;
   }
   
@@ -1954,6 +2937,58 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       priority: 2
     });
     sendResponse({ ok: true });
+    return true;
+  }
+
+  // Handle virtual closet requests
+  if (msg?.type === "OPEN_CLOSET") {
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      if (tabs[0]) {
+        openVirtualCloset(tabs[0].id);
+      }
+    });
+    sendResponse({ ok: true });
+    return true;
+  }
+
+  // Handle token count requests
+  if (msg?.type === "GET_TOKEN_COUNT") {
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      if (tabs[0]) {
+        const balance = virtualBalances.get(tabs[0].id);
+        sendResponse({ 
+          ok: true, 
+          tokens: balance ? balance.tokens : 10,
+          coins: balance ? balance.coins : 50
+        });
+      } else {
+        sendResponse({ ok: false, tokens: 10, coins: 50 });
+      }
+    });
+    return true;
+  }
+
+  // Handle bear naming
+  if (msg?.type === "BEAR_NAMED") {
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      if (tabs[0]) {
+        setBearName(tabs[0].id, msg.bearName);
+      }
+    });
+    sendResponse({ ok: true });
+    return true;
+  }
+
+  // Handle get bear name requests
+  if (msg?.type === "GET_BEAR_NAME") {
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      if (tabs[0]) {
+        const bearName = getBearName(tabs[0].id);
+        sendResponse({ ok: true, bearName: bearName });
+      } else {
+        sendResponse({ ok: false, bearName: 'Buddy' });
+      }
+    });
     return true;
   }
 
