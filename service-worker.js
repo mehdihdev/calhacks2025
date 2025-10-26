@@ -35,9 +35,21 @@ const state = new Map(); // tabId -> { productive, reason, category, url, title 
 const persistentFishTimers = new Map(); // tabId -> timer ID
 const FISH_INTERVAL = 3000; // Reduced from 10000ms to 3000ms for more continuous berating
 
+// ---- Pomodoro Timer System ----
+const pomodoroTimers = new Map(); // tabId -> { timerId, startTime, duration, isActive, isWorkSession }
+const POMODORO_WORK_TIME = 25 * 60 * 1000; // 25 minutes in milliseconds
+const POMODORO_BREAK_TIME = 5 * 60 * 1000; // 5 minutes in milliseconds
+const globalBreakMode = new Map(); // tabId -> boolean (true if in break mode)
+
 // Start persistent Fish berating for a tab
 function startPersistentFish(tabId, category) {
   console.log('🐟 Starting persistent Fish for tab:', tabId);
+  
+  // Check if tab is in break mode - if so, don't start Fish
+  if (globalBreakMode.get(tabId)) {
+    console.log('🐟 Tab is in break mode - Fish will not berate');
+    return;
+  }
   
   // Clear any existing timer
   stopPersistentFish(tabId);
@@ -51,6 +63,13 @@ function startPersistentFish(tabId, category) {
       // Check if tab still exists and is still unproductive
       const tab = await chrome.tabs.get(tabId);
       if (!tab) {
+        stopPersistentFish(tabId);
+        return;
+      }
+      
+      // Check if tab is now in break mode
+      if (globalBreakMode.get(tabId)) {
+        console.log('🐟 Tab entered break mode - stopping Fish berating');
         stopPersistentFish(tabId);
         return;
       }
@@ -124,6 +143,604 @@ function stopAllPersistentFish() {
     });
   });
   persistentFishTimers.clear();
+}
+
+// ---- Pomodoro Timer Functions ----
+function startPomodoroTimer(tabId, isWorkSession = true) {
+  console.log('🍅 Starting Pomodoro timer for tab:', tabId, 'Work session:', isWorkSession);
+  
+  // Stop any existing timer for this tab
+  stopPomodoroTimer(tabId);
+  
+  const duration = isWorkSession ? POMODORO_WORK_TIME : POMODORO_BREAK_TIME;
+  const startTime = Date.now();
+  
+  // Set break mode for Fish integration
+  globalBreakMode.set(tabId, !isWorkSession);
+  
+  // If starting break time, stop Fish berating
+  if (!isWorkSession) {
+    console.log('🍅 Break time started - stopping Fish berating for tab:', tabId);
+    stopPersistentFish(tabId);
+  }
+  
+  // First, inject the Pomodoro timer functions
+  chrome.scripting.executeScript({
+    target: { tabId: tabId },
+    func: () => {
+      // Define Pomodoro timer functions
+      window.createPomodoroTimer = function(duration, isWorkSession) {
+        console.log('🍅 Creating Pomodoro timer:', duration, 'Work session:', isWorkSession);
+        
+        // Remove any existing timer
+        window.removePomodoroTimer();
+        
+        // Calculate initial time display
+        const minutes = Math.floor(duration / 60000);
+        const seconds = Math.floor((duration % 60000) / 1000);
+        const initialTime = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+        
+        // Create draggable and resizable timer
+        const timer = document.createElement('div');
+        timer.id = 'pomodoro-timer';
+        timer.style.cssText = `
+          position: fixed;
+          top: 8px;
+          left: 8px;
+          background: ${isWorkSession ? 'linear-gradient(135deg, #4CAF50, #45a049)' : 'linear-gradient(135deg, #f44336, #d32f2f)'};
+          color: white;
+          padding: 8px 12px;
+          border-radius: 8px;
+          font-family: 'Segoe UI', Arial, sans-serif;
+          font-size: 14px;
+          font-weight: bold;
+          z-index: 10000;
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+          border: 2px solid ${isWorkSession ? '#4CAF50' : '#f44336'};
+          cursor: move;
+          min-width: 80px;
+          min-height: 40px;
+          justify-content: center;
+          user-select: none;
+          width: 120px;
+          height: 50px;
+        `;
+        
+        // Add timer content with resize handle
+        timer.innerHTML = `
+          <span id="timer-emoji" style="font-size: 12px;">${isWorkSession ? '🍅' : '☕'}</span>
+          <span id="timer-display" style="font-family: 'Courier New', monospace; font-size: 16px;">${initialTime}</span>
+          <div id="resize-handle" style="position: absolute; bottom: 2px; right: 2px; width: 12px; height: 12px; background: rgba(255,255,255,0.4); border-radius: 2px; cursor: se-resize; border: 1px solid rgba(255,255,255,0.2);"></div>
+        `;
+        
+        // Function to update text size based on timer dimensions
+        const updateTextSize = () => {
+          const width = timer.offsetWidth;
+          const height = timer.offsetHeight;
+          
+          // Calculate font sizes based on dimensions
+          const emojiSize = Math.min(width * 0.15, height * 0.4, 20); // Max 20px
+          const displaySize = Math.min(width * 0.25, height * 0.6, 32); // Max 32px
+          
+          const emojiEl = timer.querySelector('#timer-emoji');
+          const displayEl = timer.querySelector('#timer-display');
+          
+          if (emojiEl) emojiEl.style.fontSize = Math.max(8, emojiSize) + 'px';
+          if (displayEl) displayEl.style.fontSize = Math.max(10, displaySize) + 'px';
+        };
+        
+        // Initial text size calculation
+        updateTextSize();
+        
+        // Add drag functionality with performance optimization
+        let isDragging = false;
+        let dragOffset = { x: 0, y: 0 };
+        let animationFrameId = null;
+        
+        timer.addEventListener('mousedown', (e) => {
+          // Only start drag if not clicking on resize handle
+          if (e.target.id !== 'resize-handle') {
+            isDragging = true;
+            dragOffset.x = e.clientX - timer.offsetLeft;
+            dragOffset.y = e.clientY - timer.offsetTop;
+            timer.style.cursor = 'grabbing';
+            timer.style.transition = 'none'; // Disable transitions during drag
+            e.preventDefault();
+          }
+        });
+        
+        const updatePosition = (e) => {
+          if (isDragging) {
+            const newX = e.clientX - dragOffset.x;
+            const newY = e.clientY - dragOffset.y;
+            
+            // Keep timer within viewport bounds
+            const maxX = window.innerWidth - timer.offsetWidth;
+            const maxY = window.innerHeight - timer.offsetHeight;
+            
+            timer.style.left = Math.max(0, Math.min(newX, maxX)) + 'px';
+            timer.style.top = Math.max(0, Math.min(newY, maxY)) + 'px';
+          }
+        };
+        
+        document.addEventListener('mousemove', (e) => {
+          if (isDragging) {
+            if (animationFrameId) {
+              cancelAnimationFrame(animationFrameId);
+            }
+            animationFrameId = requestAnimationFrame(() => updatePosition(e));
+          }
+        });
+        
+        document.addEventListener('mouseup', () => {
+          if (isDragging) {
+            isDragging = false;
+            timer.style.cursor = 'move';
+            timer.style.transition = 'all 0.2s ease'; // Re-enable transitions
+            if (animationFrameId) {
+              cancelAnimationFrame(animationFrameId);
+              animationFrameId = null;
+            }
+          }
+        });
+        
+        // Add resize handle functionality
+        const resizeHandle = timer.querySelector('#resize-handle');
+        let isResizing = false;
+        let resizeStart = { x: 0, y: 0, width: 0, height: 0 };
+        
+        resizeHandle.addEventListener('mousedown', (e) => {
+          isResizing = true;
+          resizeStart.x = e.clientX;
+          resizeStart.y = e.clientY;
+          resizeStart.width = timer.offsetWidth;
+          resizeStart.height = timer.offsetHeight;
+          timer.style.transition = 'none'; // Disable transitions during resize
+          e.stopPropagation();
+          e.preventDefault();
+        });
+        
+        const updateSize = (e) => {
+          if (isResizing) {
+            const deltaX = e.clientX - resizeStart.x;
+            const deltaY = e.clientY - resizeStart.y;
+            const newWidth = Math.max(80, resizeStart.width + deltaX);
+            const newHeight = Math.max(40, resizeStart.height + deltaY);
+            
+            timer.style.width = newWidth + 'px';
+            timer.style.height = newHeight + 'px';
+            
+            // Update text size after resize
+            updateTextSize();
+          }
+        };
+        
+        document.addEventListener('mousemove', (e) => {
+          if (isResizing) {
+            if (animationFrameId) {
+              cancelAnimationFrame(animationFrameId);
+            }
+            animationFrameId = requestAnimationFrame(() => updateSize(e));
+          }
+        });
+        
+        document.addEventListener('mouseup', () => {
+          if (isResizing) {
+            isResizing = false;
+            timer.style.transition = 'all 0.2s ease'; // Re-enable transitions
+            if (animationFrameId) {
+              cancelAnimationFrame(animationFrameId);
+              animationFrameId = null;
+            }
+          }
+        });
+        
+        // Add hover effect (only when not dragging/resizing)
+        timer.addEventListener('mouseenter', () => {
+          if (!isDragging && !isResizing) {
+            timer.style.transform = 'scale(1.02)';
+            timer.style.boxShadow = '0 6px 16px rgba(0, 0, 0, 0.4)';
+          }
+        });
+        
+        timer.addEventListener('mouseleave', () => {
+          if (!isDragging && !isResizing) {
+            timer.style.transform = 'scale(1)';
+            timer.style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.3)';
+          }
+        });
+        
+        // Add double-click to toggle timer pause/resume (placeholder for future feature)
+        timer.addEventListener('dblclick', (e) => {
+          e.preventDefault();
+          console.log('🍅 Pomodoro timer double-clicked - pause/resume feature coming soon!');
+        });
+        
+        document.body.appendChild(timer);
+        console.log('🍅 Compact Pomodoro timer created with initial time:', initialTime);
+      };
+      
+      window.updatePomodoroTimer = function(remaining, isWorkSession) {
+        const timerDisplay = document.getElementById('timer-display');
+        const timer = document.getElementById('pomodoro-timer');
+        
+        if (timerDisplay && timer) {
+          const minutes = Math.floor(remaining / 60000);
+          const seconds = Math.floor((remaining % 60000) / 1000);
+          const timeString = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+          timerDisplay.textContent = timeString;
+          
+          // Update color based on session type and remaining time
+          if (isWorkSession) {
+            // Work session - green colors
+            if (remaining < 60000) { // Less than 1 minute
+              timer.style.background = 'linear-gradient(135deg, #ff9800, #f57c00)'; // Orange warning
+              timer.style.borderColor = '#ff9800';
+            } else if (remaining < 300000) { // Less than 5 minutes
+              timer.style.background = 'linear-gradient(135deg, #8bc34a, #689f38)'; // Lighter green
+              timer.style.borderColor = '#8bc34a';
+            } else {
+              timer.style.background = 'linear-gradient(135deg, #4CAF50, #45a049)'; // Full green
+              timer.style.borderColor = '#4CAF50';
+            }
+          } else {
+            // Break session - red colors
+            if (remaining < 60000) { // Less than 1 minute
+              timer.style.background = 'linear-gradient(135deg, #ff5722, #e64a19)'; // Darker red warning
+              timer.style.borderColor = '#ff5722';
+            } else {
+              timer.style.background = 'linear-gradient(135deg, #f44336, #d32f2f)'; // Full red
+              timer.style.borderColor = '#f44336';
+            }
+          }
+          
+          // Add pulsing animation when time is running low
+          if (remaining < 60000) {
+            timer.style.animation = 'pulse 1s infinite';
+          } else {
+            timer.style.animation = 'none';
+          }
+          
+          // Update text size based on current dimensions
+          const width = timer.offsetWidth;
+          const height = timer.offsetHeight;
+          const emojiSize = Math.min(width * 0.15, height * 0.4, 20);
+          const displaySize = Math.min(width * 0.25, height * 0.6, 32);
+          
+          const emojiEl = timer.querySelector('#timer-emoji');
+          if (emojiEl) emojiEl.style.fontSize = Math.max(8, emojiSize) + 'px';
+          timerDisplay.style.fontSize = Math.max(10, displaySize) + 'px';
+        }
+      };
+      
+      window.pausePomodoroTimer = function() {
+        const timer = document.getElementById('pomodoro-timer');
+        if (timer) {
+          timer.style.opacity = '0.6';
+          timer.style.border = '2px dashed rgba(255,255,255,0.8)';
+          timer.style.background = 'linear-gradient(135deg, #666, #555)';
+          
+          // Add paused indicator
+          const pausedIndicator = timer.querySelector('.paused-indicator');
+          if (!pausedIndicator) {
+            const indicator = document.createElement('span');
+            indicator.className = 'paused-indicator';
+            indicator.textContent = ' ⏸️';
+            indicator.style.fontSize = '12px';
+            timer.appendChild(indicator);
+          }
+          
+          console.log('🍅 Pomodoro timer paused');
+        }
+      };
+      
+      window.resumePomodoroTimer = function() {
+        const timer = document.getElementById('pomodoro-timer');
+        if (timer) {
+          timer.style.opacity = '1';
+          timer.style.border = '2px solid #4CAF50';
+          timer.style.background = 'linear-gradient(135deg, #4CAF50, #45a049)';
+          
+          // Remove paused indicator
+          const pausedIndicator = timer.querySelector('.paused-indicator');
+          if (pausedIndicator) {
+            pausedIndicator.remove();
+          }
+          
+          console.log('🍅 Pomodoro timer resumed');
+        }
+      };
+      
+      window.removePomodoroTimer = function() {
+        const existingTimer = document.getElementById('pomodoro-timer');
+        if (existingTimer) {
+          existingTimer.remove();
+          console.log('🍅 Pomodoro timer removed');
+        }
+      };
+      
+      window.playKitchenAlarm = function() {
+        console.log('🔔 Playing kitchen alarm sound');
+        
+        // Create audio context for alarm sound
+        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        
+        // Create a kitchen timer-like alarm sound
+        const playAlarmTone = (frequency, duration, delay = 0) => {
+          setTimeout(() => {
+            const oscillator = audioContext.createOscillator();
+            const gainNode = audioContext.createGain();
+            
+            oscillator.connect(gainNode);
+            gainNode.connect(audioContext.destination);
+            
+            oscillator.frequency.setValueAtTime(frequency, audioContext.currentTime);
+            oscillator.type = 'square'; // More buzzer-like sound
+            
+            gainNode.gain.setValueAtTime(0.3, audioContext.currentTime);
+            gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + duration);
+            
+            oscillator.start(audioContext.currentTime);
+            oscillator.stop(audioContext.currentTime + duration);
+          }, delay);
+        };
+        
+        // Play multiple alarm tones to simulate kitchen timer
+        playAlarmTone(800, 0.2, 0);    // First beep
+        playAlarmTone(800, 0.2, 300);  // Second beep
+        playAlarmTone(800, 0.2, 600);  // Third beep
+        playAlarmTone(1000, 0.3, 900); // Higher tone
+        playAlarmTone(800, 0.2, 1300); // Final beep
+        playAlarmTone(1000, 0.3, 1600); // Final higher tone
+      };
+      
+      window.showPomodoroComplete = function(isWorkSession) {
+        console.log('🍅 Pomodoro session complete:', isWorkSession ? 'Work' : 'Break');
+        
+        // Create completion notification
+        const notification = document.createElement('div');
+        notification.style.cssText = `
+          position: fixed;
+          top: 50%;
+          left: 50%;
+          transform: translate(-50%, -50%);
+          background: linear-gradient(135deg, #4CAF50, #45a049);
+          color: white;
+          padding: 30px;
+          border-radius: 15px;
+          font-family: Arial, sans-serif;
+          font-size: 24px;
+          font-weight: bold;
+          text-align: center;
+          z-index: 20000;
+          box-shadow: 0 8px 32px rgba(76, 175, 80, 0.5);
+          border: 3px solid #4CAF50;
+          animation: celebration 2s ease-in-out;
+        `;
+        
+        notification.innerHTML = `
+          <div style="font-size: 48px; margin-bottom: 15px;">${isWorkSession ? '🎉' : '☕'}</div>
+          <div>${isWorkSession ? 'Work Session Complete!' : 'Break Time!'}</div>
+          <div style="font-size: 16px; margin-top: 10px; opacity: 0.9;">
+            ${isWorkSession ? 'Time for a 5-minute break!' : 'Ready to get back to work?'}
+          </div>
+          <div style="font-size: 14px; margin-top: 15px; opacity: 0.8;">🍅 Pomodoro Timer</div>
+        `;
+        
+        // Add celebration animation
+        if (!document.getElementById('celebration-animation')) {
+          const style = document.createElement('style');
+          style.id = 'celebration-animation';
+          style.textContent = `
+            @keyframes celebration {
+              0% { transform: translate(-50%, -50%) scale(0.5); opacity: 0; }
+              50% { transform: translate(-50%, -50%) scale(1.1); opacity: 1; }
+              100% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+            }
+            @keyframes pulse {
+              0% { transform: scale(1); }
+              50% { transform: scale(1.05); }
+              100% { transform: scale(1); }
+            }
+          `;
+          document.head.appendChild(style);
+        }
+        
+        document.body.appendChild(notification);
+        
+        // Remove notification after 5 seconds
+        setTimeout(() => {
+          if (notification.parentNode) {
+            notification.remove();
+          }
+        }, 5000);
+      };
+      
+      console.log('🍅 Pomodoro timer functions injected');
+    }
+  }).then(() => {
+    // Now create the timer
+    chrome.scripting.executeScript({
+      target: { tabId: tabId },
+      func: (duration, isWorkSession) => {
+        window.createPomodoroTimer(duration, isWorkSession);
+      },
+      args: [duration, isWorkSession]
+    }).catch(error => {
+      console.log('Could not create Pomodoro timer for tab:', tabId, error);
+    });
+  }).catch(error => {
+    console.log('Could not inject Pomodoro timer functions for tab:', tabId, error);
+  });
+  
+  // Set up timer to update every second
+  const timerId = setInterval(() => {
+    const elapsed = Date.now() - startTime;
+    const remaining = Math.max(0, duration - elapsed);
+    
+    // Update timer display
+    chrome.scripting.executeScript({
+      target: { tabId: tabId },
+      func: (remaining, isWorkSession) => {
+        window.updatePomodoroTimer(remaining, isWorkSession);
+      },
+      args: [remaining, isWorkSession]
+    }).catch(error => {
+      console.log('Could not update Pomodoro timer for tab:', tabId, error);
+    });
+    
+    // Check if timer is finished
+    if (remaining <= 0) {
+      clearInterval(timerId);
+      pomodoroTimers.delete(tabId);
+      
+      // Timer finished - play alarm and show notification
+      chrome.scripting.executeScript({
+        target: { tabId: tabId },
+        func: (isWorkSession) => {
+          window.playKitchenAlarm();
+          window.showPomodoroComplete(isWorkSession);
+        },
+        args: [isWorkSession]
+      }).catch(error => {
+        console.log('Could not show Pomodoro complete for tab:', tabId, error);
+      });
+      
+      console.log('🍅 Pomodoro timer finished for tab:', tabId);
+      
+      // Auto-start next session after a short delay
+      setTimeout(() => {
+        if (isWorkSession) {
+          console.log('🍅 Auto-starting break session');
+          startPomodoroTimer(tabId, false);
+        } else {
+          console.log('🍅 Break finished - ready for work session');
+          globalBreakMode.delete(tabId);
+        }
+      }, 3000); // 3 second delay before auto-starting next session
+    }
+  }, 1000);
+  
+  pomodoroTimers.set(tabId, { timerId, startTime, duration, isActive: true, isWorkSession });
+}
+
+function stopPomodoroTimer(tabId) {
+  const timerData = pomodoroTimers.get(tabId);
+  if (timerData) {
+    console.log('🍅 Pausing Pomodoro timer for tab:', tabId);
+    clearInterval(timerData.timerId);
+    
+    // Mark timer as paused instead of deleting it
+    timerData.isActive = false;
+    timerData.isPaused = true;
+    pomodoroTimers.set(tabId, timerData);
+    
+    // Clear break mode
+    globalBreakMode.delete(tabId);
+    
+    // Pause timer display (show paused state)
+    chrome.scripting.executeScript({
+      target: { tabId: tabId },
+      func: () => {
+        window.pausePomodoroTimer();
+      }
+    }).catch(error => {
+      console.log('Could not pause Pomodoro timer for tab:', tabId, error);
+    });
+  }
+}
+
+function resumePomodoroTimer(tabId, timerData) {
+  console.log('🍅 Resuming Pomodoro timer for tab:', tabId);
+  
+  // Calculate remaining time
+  const elapsed = Date.now() - timerData.startTime;
+  const remaining = Math.max(0, timerData.duration - elapsed);
+  
+  if (remaining <= 0) {
+    // Timer was already finished, remove it
+    pomodoroTimers.delete(tabId);
+    chrome.scripting.executeScript({
+      target: { tabId: tabId },
+      func: () => {
+        window.removePomodoroTimer();
+      }
+    }).catch(error => {
+      console.log('Could not remove completed Pomodoro timer for tab:', tabId, error);
+    });
+    return;
+  }
+  
+  // Resume the timer
+  const newStartTime = Date.now();
+  timerData.startTime = newStartTime;
+  timerData.isActive = true;
+  timerData.isPaused = false;
+  pomodoroTimers.set(tabId, timerData);
+  
+  // Resume timer display
+  chrome.scripting.executeScript({
+    target: { tabId: tabId },
+    func: () => {
+      window.resumePomodoroTimer();
+    }
+  }).catch(error => {
+    console.log('Could not resume Pomodoro timer for tab:', tabId, error);
+  });
+  
+  // Restart the interval
+  const timerId = setInterval(() => {
+    const elapsed = Date.now() - newStartTime;
+    const remaining = Math.max(0, timerData.duration - elapsed);
+    
+    // Update timer display
+    chrome.scripting.executeScript({
+      target: { tabId: tabId },
+      func: (remaining, isWorkSession) => {
+        window.updatePomodoroTimer(remaining, isWorkSession);
+      },
+      args: [remaining, timerData.isWorkSession]
+    }).catch(error => {
+      console.log('Could not update Pomodoro timer for tab:', tabId, error);
+    });
+    
+    // Check if timer is finished
+    if (remaining <= 0) {
+      clearInterval(timerId);
+      pomodoroTimers.delete(tabId);
+      
+      // Timer finished - play alarm and show notification
+      chrome.scripting.executeScript({
+        target: { tabId: tabId },
+        func: (isWorkSession) => {
+          window.playKitchenAlarm();
+          window.showPomodoroComplete(isWorkSession);
+        },
+        args: [timerData.isWorkSession]
+      }).catch(error => {
+        console.log('Could not show Pomodoro complete for tab:', tabId, error);
+      });
+      
+      console.log('🍅 Pomodoro timer finished for tab:', tabId);
+      
+      // Auto-start next session after a short delay
+      setTimeout(() => {
+        if (timerData.isWorkSession) {
+          console.log('🍅 Auto-starting break session');
+          startPomodoroTimer(tabId, false);
+        } else {
+          console.log('🍅 Break finished - ready for work session');
+          globalBreakMode.delete(tabId);
+        }
+      }, 3000); // 3 second delay before auto-starting next session
+    }
+  }, 1000);
+  
+  timerData.timerId = timerId;
+  pomodoroTimers.set(tabId, timerData);
 }
 
 // ---- Core: classify a tab now ----
@@ -389,6 +1006,218 @@ async function playBeratingAudio(category, targetTabId = null, addFishPrefix = t
             
             // Trigger chaotic popup flood
             console.log('About to trigger chaotic popup flood...');
+            
+            // Define Pomodoro timer functions inside injected script
+            function createPomodoroTimer(duration, isWorkSession) {
+              console.log('🍅 Creating Pomodoro timer:', duration, 'Work session:', isWorkSession);
+              
+              // Remove any existing timer
+              removePomodoroTimer();
+              
+              // Calculate initial time display
+              const minutes = Math.floor(duration / 60000);
+              const seconds = Math.floor((duration % 60000) / 1000);
+              const initialTime = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+              
+              // Create compact timer for extension bar area
+              const timer = document.createElement('div');
+              timer.id = 'pomodoro-timer';
+              timer.style.cssText = `
+                position: fixed;
+                top: 8px;
+                right: 200px;
+                background: ${isWorkSession ? 'linear-gradient(135deg, #4CAF50, #45a049)' : 'linear-gradient(135deg, #f44336, #d32f2f)'};
+                color: white;
+                padding: 4px 8px;
+                border-radius: 4px;
+                font-family: 'Segoe UI', Arial, sans-serif;
+                font-size: 12px;
+                font-weight: bold;
+                z-index: 10000;
+                display: flex;
+                align-items: center;
+                gap: 4px;
+                box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+                border: 1px solid ${isWorkSession ? '#4CAF50' : '#f44336'};
+                cursor: pointer;
+                transition: all 0.2s ease;
+                min-width: 60px;
+                justify-content: center;
+              `;
+              
+              // Add timer content
+              timer.innerHTML = `
+                <span style="font-size: 10px;">${isWorkSession ? '🍅' : '☕'}</span>
+                <span id="timer-display" style="font-family: 'Courier New', monospace;">${initialTime}</span>
+              `;
+              
+              // Add hover effect
+              timer.addEventListener('mouseenter', () => {
+                timer.style.transform = 'scale(1.05)';
+                timer.style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.4)';
+              });
+              
+              timer.addEventListener('mouseleave', () => {
+                timer.style.transform = 'scale(1)';
+                timer.style.boxShadow = '0 2px 8px rgba(0, 0, 0, 0.3)';
+              });
+              
+              // Click to pause/resume (placeholder for now)
+              timer.addEventListener('click', () => {
+                console.log('🍅 Pomodoro timer clicked');
+              });
+              
+              document.body.appendChild(timer);
+              console.log('🍅 Compact Pomodoro timer created with initial time:', initialTime);
+            }
+            
+            function updatePomodoroTimer(remaining, isWorkSession) {
+              const timerDisplay = document.getElementById('timer-display');
+              const timer = document.getElementById('pomodoro-timer');
+              
+              if (timerDisplay && timer) {
+                const minutes = Math.floor(remaining / 60000);
+                const seconds = Math.floor((remaining % 60000) / 1000);
+                const timeString = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+                timerDisplay.textContent = timeString;
+                
+                // Update color based on session type and remaining time
+                if (isWorkSession) {
+                  // Work session - green colors
+                  if (remaining < 60000) { // Less than 1 minute
+                    timer.style.background = 'linear-gradient(135deg, #ff9800, #f57c00)'; // Orange warning
+                    timer.style.borderColor = '#ff9800';
+                  } else if (remaining < 300000) { // Less than 5 minutes
+                    timer.style.background = 'linear-gradient(135deg, #8bc34a, #689f38)'; // Lighter green
+                    timer.style.borderColor = '#8bc34a';
+                  } else {
+                    timer.style.background = 'linear-gradient(135deg, #4CAF50, #45a049)'; // Full green
+                    timer.style.borderColor = '#4CAF50';
+                  }
+                } else {
+                  // Break session - red colors
+                  if (remaining < 60000) { // Less than 1 minute
+                    timer.style.background = 'linear-gradient(135deg, #ff5722, #e64a19)'; // Darker red warning
+                    timer.style.borderColor = '#ff5722';
+                  } else {
+                    timer.style.background = 'linear-gradient(135deg, #f44336, #d32f2f)'; // Full red
+                    timer.style.borderColor = '#f44336';
+                  }
+                }
+                
+                // Add pulsing animation when time is running low
+                if (remaining < 60000) {
+                  timer.style.animation = 'pulse 1s infinite';
+                } else {
+                  timer.style.animation = 'none';
+                }
+              }
+            }
+            
+            function playKitchenAlarm() {
+              console.log('🔔 Playing kitchen alarm sound');
+              
+              // Create audio context for alarm sound
+              const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+              
+              // Create a kitchen timer-like alarm sound
+              const playAlarmTone = (frequency, duration, delay = 0) => {
+                setTimeout(() => {
+                  const oscillator = audioContext.createOscillator();
+                  const gainNode = audioContext.createGain();
+                  
+                  oscillator.connect(gainNode);
+                  gainNode.connect(audioContext.destination);
+                  
+                  oscillator.frequency.setValueAtTime(frequency, audioContext.currentTime);
+                  oscillator.type = 'square'; // More buzzer-like sound
+                  
+                  gainNode.gain.setValueAtTime(0.3, audioContext.currentTime);
+                  gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + duration);
+                  
+                  oscillator.start(audioContext.currentTime);
+                  oscillator.stop(audioContext.currentTime + duration);
+                }, delay);
+              };
+              
+              // Play multiple alarm tones to simulate kitchen timer
+              playAlarmTone(800, 0.2, 0);    // First beep
+              playAlarmTone(800, 0.2, 300);  // Second beep
+              playAlarmTone(800, 0.2, 600);  // Third beep
+              playAlarmTone(1000, 0.3, 900); // Higher tone
+              playAlarmTone(800, 0.2, 1300); // Final beep
+              playAlarmTone(1000, 0.3, 1600); // Final higher tone
+            }
+            
+            function showPomodoroComplete(isWorkSession) {
+              console.log('🍅 Pomodoro session complete:', isWorkSession ? 'Work' : 'Break');
+              
+              // Create completion notification
+              const notification = document.createElement('div');
+              notification.style.cssText = `
+                position: fixed;
+                top: 50%;
+                left: 50%;
+                transform: translate(-50%, -50%);
+                background: linear-gradient(135deg, #4CAF50, #45a049);
+                color: white;
+                padding: 30px;
+                border-radius: 15px;
+                font-family: Arial, sans-serif;
+                font-size: 24px;
+                font-weight: bold;
+                text-align: center;
+                z-index: 20000;
+                box-shadow: 0 8px 32px rgba(76, 175, 80, 0.5);
+                border: 3px solid #4CAF50;
+                animation: celebration 2s ease-in-out;
+              `;
+              
+              notification.innerHTML = `
+                <div style="font-size: 48px; margin-bottom: 15px;">${isWorkSession ? '🎉' : '☕'}</div>
+                <div>${isWorkSession ? 'Work Session Complete!' : 'Break Time!'}</div>
+                <div style="font-size: 16px; margin-top: 10px; opacity: 0.9;">
+                  ${isWorkSession ? 'Time for a 5-minute break!' : 'Ready to get back to work?'}
+                </div>
+                <div style="font-size: 14px; margin-top: 15px; opacity: 0.8;">🍅 Pomodoro Timer</div>
+              `;
+              
+              // Add celebration animation
+              if (!document.getElementById('celebration-animation')) {
+                const style = document.createElement('style');
+                style.id = 'celebration-animation';
+                style.textContent = `
+                  @keyframes celebration {
+                    0% { transform: translate(-50%, -50%) scale(0.5); opacity: 0; }
+                    50% { transform: translate(-50%, -50%) scale(1.1); opacity: 1; }
+                    100% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+                  }
+                  @keyframes pulse {
+                    0% { transform: scale(1); }
+                    50% { transform: scale(1.05); }
+                    100% { transform: scale(1); }
+                  }
+                `;
+                document.head.appendChild(style);
+              }
+              
+              document.body.appendChild(notification);
+              
+              // Remove notification after 5 seconds
+              setTimeout(() => {
+                if (notification.parentNode) {
+                  notification.remove();
+                }
+              }, 5000);
+            }
+            
+            function removePomodoroTimer() {
+              const existingTimer = document.getElementById('pomodoro-timer');
+              if (existingTimer) {
+                existingTimer.remove();
+                console.log('🍅 Pomodoro timer removed');
+              }
+            }
             
             // Define chaotic popup flood function inside injected script
             async function triggerChaoticPopupFlood() {
@@ -1052,6 +1881,53 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true; // async
   }
 
+  // Handle Pomodoro timer requests
+  if (msg?.type === "START_POMODORO") {
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      if (tabs[0]) {
+        startPomodoroTimer(tabs[0].id, msg.isWorkSession !== false);
+      }
+    });
+    sendResponse({ ok: true });
+    return true;
+  }
+  
+  if (msg?.type === "STOP_POMODORO") {
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      if (tabs[0]) {
+        stopPomodoroTimer(tabs[0].id);
+      }
+    });
+    sendResponse({ ok: true });
+    return true;
+  }
+  
+  if (msg?.type === "PAUSE_POMODORO") {
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      if (tabs[0]) {
+        stopPomodoroTimer(tabs[0].id); // This now pauses instead of stops
+      }
+    });
+    sendResponse({ ok: true });
+    return true;
+  }
+  
+  if (msg?.type === "RESUME_POMODORO") {
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      if (tabs[0]) {
+        const timerData = pomodoroTimers.get(tabs[0].id);
+        if (timerData && timerData.isPaused) {
+          // Resume the paused timer
+          resumePomodoroTimer(tabs[0].id, timerData);
+        } else {
+          sendResponse({ ok: false, error: "No paused timer found" });
+        }
+      }
+    });
+    sendResponse({ ok: true });
+    return true;
+  }
+  
   // Handle audio berating requests
   if (msg?.type === "PLAY_BERATING_AUDIO") {
     // Get the current active tab since sender.tab is undefined
