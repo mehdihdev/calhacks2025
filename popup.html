@@ -3,24 +3,75 @@
   <head>
     <meta charset="utf-8" />
     <style>
-      body { font-family: ui-sans-serif, system-ui, -apple-system; margin: 12px; width: 280px; }
-      .pill { display:inline-block; padding:4px 8px; border-radius:999px; font-size:12px; }
-      .prod { background:#e6ffed; border:1px solid #00a341; color:#006d28; }
-      .unprod { background:#fff5f5; border:1px solid #e11d48; color:#9f1239; }
-      .muted { color:#666; font-size:12px; }
-      label { display:block; font-size:12px; margin-top:8px; color:#444; }
-      input { width:100%; padding:6px; border:1px solid #ccc; border-radius:8px; }
-      button { margin-top:8px; width:100%; padding:8px; border:none; border-radius:8px; background:#111827; color:white; cursor:pointer; }
+      body {
+        font-family: ui-sans-serif, system-ui, -apple-system;
+        margin: 12px;
+        width: 280px;
+      }
+      .pill {
+        display: inline-block;
+        padding: 4px 8px;
+        border-radius: 999px;
+        font-size: 12px;
+      }
+      .prod {
+        background: #e6ffed;
+        border: 1px solid #00a341;
+        color: #006d28;
+      }
+      .unprod {
+        background: #fff5f5;
+        border: 1px solid #e11d48;
+        color: #9f1239;
+      }
+      .muted {
+        color: #666;
+        font-size: 12px;
+      }
+      label {
+        display: block;
+        font-size: 12px;
+        margin-top: 8px;
+        color: #444;
+      }
+      input {
+        width: 100%;
+        padding: 6px;
+        border: 1px solid #ccc;
+        border-radius: 8px;
+      }
+      button {
+        margin-top: 8px;
+        width: 100%;
+        padding: 8px;
+        border: none;
+        border-radius: 8px;
+        background: #111827;
+        color: white;
+        cursor: pointer;
+      }
+      #balance {
+        margin-top: 10px;
+        font-weight: 600;
+        text-align: center;
+        color: #333;
+      }
     </style>
   </head>
   <body>
+    <h3>💻 Productivity Tracker</h3>
+
     <div id="status">Loading…</div>
+
+    <div id="balance"> Balance: $10.00</div>
+
     <div style="margin-top:12px">
       <label>Backend URL</label>
-      <input id="backend" placeholder="http://localhost:4000" />
+      <input id="backend" placeholder="http://127.0.0.1:5000" />
       <button id="save">Save</button>
       <div class="muted">Your Claude API key stays on the backend only.</div>
     </div>
+
     <script src="popup.js"></script>
   </body>
 </html>

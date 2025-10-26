@@ -1,15 +1,21 @@
 {
   "manifest_version": 3,
   "name": "Productivity Tracker",
-  "version": "0.1.0",
-  "description": "Checks your current tab with Claude to decide if it's productive.",
-  "permissions": ["tabs", "storage", "activeTab"],
-  "host_permissions": ["<all_urls>"],
+  "version": "0.2.0",
+  "description": "Tracks your browsing habits using AI and applies money punishments when you slack off.",
+  "permissions": [
+    "tabs",
+    "storage",
+    "activeTab",
+    "scripting",
+    "notifications"
+  ],
+  "host_permissions": ["<all_urls>", "http://localhost:4000/*", "http://127.0.0.1:4000/*"],
   "background": {
     "service_worker": "service-worker.js"
   },
   "action": {
-    "default_title": "Productivity",
+    "default_title": "Productivity Tracker",
     "default_popup": "popup.html"
   },
   "content_scripts": [
@@ -20,6 +26,7 @@
     }
   ],
   "icons": {
-    "48": "calhacksicon.png"
+    "48": "calhacksicon.png",
+    "128": "calhacksicon.png"
   }
 }
